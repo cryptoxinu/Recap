@@ -50,7 +50,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 struct RootView: View {
-    @State private var selection: SidebarItem? = .ask
+    @State private var selection: SidebarItem? = .home
 
     var body: some View {
         NavigationSplitView {
@@ -61,7 +61,7 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
             .navigationTitle("CallBrain")
         } detail: {
-            switch selection ?? .ask {
+            switch selection ?? .home {
             case .home: HomeView()
             case .ask: AskView()
             case .meetings: MeetingsView()
