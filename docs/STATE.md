@@ -111,7 +111,7 @@ sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
   AskFred chat; sectioned notes with clickable `[MM:SS]` → clean transcript reader (Find bar, speaker grouping,
   sync-to-audio); timestamp-linked citations; **agentic transparent reasoning timeline** during search; durable
   **conversation history / Recents** (revisit prior chats). Builds on Phase 4 modes/planner.
-**Phase 5** — Provider resilience: Codex adapter + claude↔codex flip + fallback + streaming + quota queue.
+**Phase 5 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** claude↔codex flip (Settings, persisted) + transparent fallback on rate-limit/unavailability + provider badge; CodexRunner live-verified (PONG) + injection-hardened (--ephemeral/--ignore-user-config/read-only). Gate: 1 CRITICAL+1 HIGH+2 MED+1 LOW fixed (docs/audits/phase5-audit.md). (122 green.)
 **Phase 6** — Native polish: background jobs, notifications (overdue tasks), menu-bar, Google Drive sync, Duplicate Review.
 **Phase 7** — Archive migration: bulk backfill of the real multi-year archive, threshold tuning, usearch at scale.
 **Phase 8** — Packaging: Developer-ID sign + notarize + Sparkle, `.cbk` backup/restore, first-run wizard.
