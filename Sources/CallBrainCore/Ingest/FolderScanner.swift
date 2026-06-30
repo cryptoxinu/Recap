@@ -5,12 +5,15 @@ import Foundation
 /// existing durable import queue.
 public enum FolderScanner {
     public static func importableFiles(in folder: URL, recognized: Set<String>, max: Int = 5000) -> [URL] {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
         guard let en = FileManager.default.enumerator(
-            at: folder, includingPropertiesForKeys: [.isRegularFileKey],
+            at: folder, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
         var out: [URL] = []
         for case let url as URL in en {
-            if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) != true { continue }
+            let vals = try? url.resourceValues(forKeys: keys)
+            if vals?.isSymbolicLink == true { continue }   // don't follow symlinks (loop / dup safety)
+            if vals?.isRegularFile != true { continue }
             if recognized.contains(url.pathExtension.lowercased()) {
                 out.append(url)
                 if out.count >= max { break }

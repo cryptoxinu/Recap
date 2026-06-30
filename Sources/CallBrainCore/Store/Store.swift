@@ -867,10 +867,13 @@ public final class Store: @unchecked Sendable {
         }
     }
 
-    /// Validate a `.cbk` is a real CallBrain backup (opens read-only, checks the core schema) before a
-    /// restore overwrites the user's data.
+    /// Validate a `.cbk` is a real CallBrain backup before a restore overwrites the user's data. Opens
+    /// **read-only** so validation never mutates the backup or spills `-wal`/`-shm` next to it.
     public static func isValidBackup(at url: URL) -> Bool {
-        guard let q = try? DatabaseQueue(path: url.path) else { return false }
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        var config = Configuration()
+        config.readonly = true
+        guard let q = try? DatabaseQueue(path: url.path, configuration: config) else { return false }
         return ((try? q.read { db in
             try Int.fetchOne(db, sql: "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('meetings','transcript_chunks')") ?? 0
         }) ?? 0) == 2

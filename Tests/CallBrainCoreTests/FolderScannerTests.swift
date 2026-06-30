@@ -24,6 +24,21 @@ struct FolderScannerTests {
         #expect(names == ["a.txt", "b.docx", "call.srt"])   // pdf + hidden excluded; nested included
     }
 
+    @Test("symlinks are skipped (no loop / duplicate import)")
+    func skipsSymlinks() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("cb-sym-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let real = root.appendingPathComponent("real.txt")
+        try "x".write(to: real, atomically: true, encoding: .utf8)
+        // a symlink pointing back into the same dir (would loop / duplicate if followed)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("loop"), withDestinationURL: root)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("alias.txt"), withDestinationURL: real)
+
+        let found = FolderScanner.importableFiles(in: root, recognized: ["txt"])
+        #expect(found.map(\.lastPathComponent) == ["real.txt"])   // alias.txt symlink + loop skipped
+    }
+
     @Test("empty / missing folder → no crash, empty result")
     func empty() {
         let nope = FileManager.default.temporaryDirectory.appendingPathComponent("cb-missing-\(UUID().uuidString)")
