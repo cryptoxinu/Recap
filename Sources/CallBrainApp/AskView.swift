@@ -131,9 +131,11 @@ struct AskMessageView: View {
                 Spacer()
             }
             if message.pending {
-                ProgressView().controlSize(.small)
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Thinking…").foregroundStyle(.secondary) }
+            } else if message.role == .assistant {
+                MarkdownAnswerView(text: message.text).textSelection(.enabled)
             } else {
-                Text(.init(message.text)).textSelection(.enabled)   // inline markdown (bold/italic)
+                Text(message.text).textSelection(.enabled)
             }
             if !message.citations.isEmpty {
                 VStack(alignment: .leading, spacing: 3) {
