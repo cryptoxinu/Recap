@@ -23,6 +23,10 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         // Native Swift ZIP reading for .docx (Google Meet "Notes by Gemini") — replaces the python extract.
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0"),
+        // On-device transcription (Phase 3): WhisperKit (CoreML Whisper) + FluidAudio (diarization).
+        // Used only by the app target's adapters; CallBrainCore stays pure (protocols only).
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.0"),
     ],
     targets: [
         .target(
@@ -33,9 +37,23 @@ let package = Package(
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .target(
+            name: "CallBrainTranscribe",   // on-device transcription adapters (WhisperKit + FluidAudio)
+            dependencies: [
+                "CallBrainCore",
+                .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "CallBrainApp",
-            dependencies: ["CallBrainCore"],
+            dependencies: ["CallBrainCore", "CallBrainTranscribe"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "cbtranscribe",   // dev tool: transcribe a video into a store (Phase 3 live verify)
+            dependencies: ["CallBrainCore", "CallBrainTranscribe"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
