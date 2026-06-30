@@ -88,9 +88,12 @@ real morning sync.
 - [x] Navigable citations (tap "Sources" → source call's transcript, scroll+highlight).
 - [x] Phase-1 Codex gate: FAIL(2 HIGH)→fixed→PASS. (Streaming moved to **Phase 5** where it belongs.)
 
-**Phase 2** — Ingestion intelligence: full 3-stage auto-detect + routing, all parsers tolerant +
-fingerprint-learning, **native Swift `.docx` read** (replace python extract), metadata/entity/NER,
-two-tier BLAKE3 idempotency + dedupe, durable job queue + Import Queue/needs-review UI.
+**Phase 2 — ✅ COMPLETE + Codex+SME gate PASS (2026-06-30):** native Swift `.docx` read (no Python),
+3-stage detect/route + Gemini-notes detection, `ingestFile` + drag-drop/picker, **durable import queue**
+(persisted payloads, resume-on-relaunch, needs-review), two-tier content-hash dedupe, native NER
+(NaturalLanguage), Fireflies-style notes rendering. **Dual audit** (Codex + swift-macos-sme) → all
+HIGH/MED/LOW fixed (+9 regression tests, 82 green). Deferred-not-creep: SRT/VTT + Cluely parsers, Meet
+sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
 **Phase 3** — Local transcription: AVFoundation → WhisperKit + FluidAudio diarization (raw Meet video).
 **Phase 4** — Retrieval depth: all 8 AI modes, hard date-gating, action-item extraction → Tasks, eval harness.
 **Phase 4.5** — **Fireflies-grade meeting workspace & conversational intelligence** (founder direction 2026-06-30,
