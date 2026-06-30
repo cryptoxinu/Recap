@@ -69,4 +69,14 @@ struct QueryPlannerTests {
     func noDate() {
         #expect(QueryPlanner.plan("what is the BitRouter status").dateRange == nil)
     }
+
+    @Test("'past week' / 'past month' (no number) parse as last week/month (gate HIGH)")
+    func pastSynonyms() {
+        let (now, cal) = fixed()
+        let pw = QueryPlanner.plan("what did we discuss in the past week about Render", now: now, calendar: cal).dateRange
+        #expect(pw?.label == "last week")
+        #expect(pw != nil)                                   // date-gate NOT silently disabled
+        let pm = QueryPlanner.plan("anything from the past month", now: now, calendar: cal).dateRange
+        #expect(pm?.label == "last month")
+    }
 }

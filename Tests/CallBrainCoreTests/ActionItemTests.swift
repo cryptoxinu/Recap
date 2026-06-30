@@ -31,6 +31,40 @@ struct ActionItemTests {
         #expect(!texts.contains("Zade implemented Discord scrapers."))
     }
 
+    @Test("bullet-prefixed [Owner] line still attributes; negative placeholders dropped (gate MED)")
+    func bulletOwnerAndNegatives() {
+        let items = ActionItemExtractor.fromNotes(utterances([
+            "## Action items",
+            "• [Ghazal] Send pricing notes",        // bullet + owner → must attribute to Ghazal
+            "No action items were identified.",      // placeholder → not a task
+            "- [Max] Model the emissions",           // dash bullet + owner
+        ]))
+        #expect(items.contains { $0.owner == "Ghazal" && $0.text == "Send pricing notes" })
+        #expect(items.contains { $0.owner == "Max" && $0.text == "Model the emissions" })
+        #expect(!items.contains { $0.text.lowercased().contains("no action items") })
+        #expect(items.count == 2)
+    }
+
+    @Test("re-saving a meeting id preserves toggled task status (gate HIGH — no cascade wipe)")
+    func reSavePreservesTaskStatus() throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("cb-resave-\(UUID().uuidString).sqlite").path
+        let store = try Store(path: path)
+        let m = Meeting(id: "fixed_id", title: "Daily", date: "2026-06-29", source: .gmeetGemini)
+        let chunk = Store.ChunkInput(chunkID: "fixed_id_c0", meetingID: "fixed_id", version: 0, seq: 0,
+                                     speaker: "Gemini Notes", tStart: 0, tEnd: 0, text: "[Zade] ship it", contentHash: "h")
+        let task = Store.TaskInput(id: "t0", owner: "Zade", text: "ship it", dedupeKey: "zade|ship it")
+        try store.saveMeeting(m, chunks: [chunk], tasks: [task])
+        try store.setTaskStatus(id: "t0", .done)
+        #expect(try store.openTaskCount() == 0)
+
+        // re-save the SAME meeting id (e.g. reprocessed) — must NOT cascade-wipe the done task
+        try store.saveMeeting(m, chunks: [chunk], tasks: [task])
+        let rows = try store.tasks()
+        #expect(rows.count == 1)
+        #expect(rows.first?.item.status == .done)            // toggled status preserved
+        #expect(try store.meetingCount() == 1)
+    }
+
     @Test("dedupes identical owner+text")
     func dedupes() {
         let items = ActionItemExtractor.fromNotes(utterances([

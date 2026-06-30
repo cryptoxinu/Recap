@@ -91,7 +91,9 @@ public enum QueryPlanner {
             let s = weekStart(now, calendar)
             return range(s, add(s, days: 7), "this week")
         }
-        if q.contains("last week") {
+        // "past week" (no number) is a synonym for last week — without this the date-gate silently
+        // disables and the question searches the WHOLE corpus (Codex P4 gate HIGH).
+        if q.contains("last week") || q.contains("past week") {
             let s = weekStart(now, calendar)
             return range(add(s, days: -7), s, "last week")
         }
@@ -99,7 +101,7 @@ public enum QueryPlanner {
             let s = monthStart(now, calendar)
             return range(s, add(s, months: 1), "this month")
         }
-        if q.contains("last month") {
+        if q.contains("last month") || q.contains("past month") {
             let s = monthStart(now, calendar)
             return range(add(s, months: -1), s, "last month")
         }

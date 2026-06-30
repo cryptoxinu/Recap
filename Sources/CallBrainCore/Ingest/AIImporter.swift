@@ -164,10 +164,39 @@ public struct AIImporter: Sendable {
             throw ParseError.unrecognizedStructure("AI import: no utterances extracted")
         }
         let title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let date = (obj["date"] as? String).flatMap { GeminiNotesParser.parseDate($0) ?? ($0.count >= 10 ? String($0.prefix(10)) : nil) }
+        // Normalize to canonical YYYY-MM-DD (else date-gating's string compare silently excludes it —
+        // Codex P4 gate MED). Reject anything we can't normalize rather than store garbage.
+        let date = (obj["date"] as? String).flatMap { Self.normalizeDate($0) }
         return ParsedTranscript(title: (title?.isEmpty == false) ? title : "Imported call",
                                 date: date, startedAt: nil, durationSeconds: nil,
                                 source: .paste, speakers: speakers, utterances: utterances)
+    }
+
+    /// Coerce a model-returned date string to canonical `YYYY-MM-DD`, or nil if it isn't a real date.
+    /// Handles `2026-06-29`, `2026/06/29`, `06/29/2026`, `6/29/26`, and `Jun 29, 2026` (via GeminiNotesParser).
+    static func normalizeDate(_ s: String) -> String? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil { return t }
+        if let m = t.range(of: #"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})"#, options: .regularExpression) {
+            return ymd(String(t[m]), order: .ymd)
+        }
+        if let m = t.range(of: #"^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})"#, options: .regularExpression) {
+            return ymd(String(t[m]), order: .mdy)
+        }
+        return GeminiNotesParser.parseDate(t)         // "Jun 29, 2026"
+    }
+
+    private enum DateOrder { case ymd, mdy }
+    private static func ymd(_ s: String, order: DateOrder) -> String? {
+        let parts = s.split { $0 == "/" || $0 == "-" }.compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        let y: Int, mo: Int, d: Int
+        switch order {
+        case .ymd: (y, mo, d) = (parts[0], parts[1], parts[2])
+        case .mdy: (mo, d, y) = (parts[0], parts[1], parts[2] < 100 ? 2000 + parts[2] : parts[2])
+        }
+        guard (1...12).contains(mo), (1...31).contains(d), (1900...2200).contains(y) else { return nil }
+        return String(format: "%04d-%02d-%02d", y, mo, d)
     }
 
     private func generateTitle(forSpeakers speakers: [String], sample: String) async throws -> String {

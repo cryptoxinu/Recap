@@ -52,11 +52,16 @@ public struct EvalHarness: Sendable {
                 if ans.status != .answered { failures.append("expected answer, got \(ans.status.rawValue)") }
                 else if ans.citations.isEmpty { failures.append("answered with no citations") }
                 else {
-                    // Grounding: every cited chunk must exist in the store (no fabricated id).
+                    // Grounding 1: every cited chunk must exist in the store (no fabricated id).
                     let ids = ans.citations.map(\.chunkID)
                     let real = Set(((try? ask.search.store.chunks(ids: ids)) ?? []).map(\.chunkID))
                     let ghost = ids.filter { !real.contains($0) }
-                    if !ghost.isEmpty { failures.append("fabricated citation(s): \(ghost)") }
+                    if !ghost.isEmpty { failures.append("fabricated citation id(s): \(ghost)") }
+                    // Grounding 2: every [S#] TAG the prose references must map to an attached citation
+                    // — a dangling tag like [S99] is a fabricated citation marker (Codex P4 gate HIGH).
+                    let attached = Set(ans.citations.map(\.tag))
+                    let dangling = AskEngine.referencedTags(in: ans.text).subtracting(attached)
+                    if !dangling.isEmpty { failures.append("dangling citation tag(s) in text: \(dangling.sorted())") }
                 }
             case .dateScoped(let label):
                 if ans.plan?.dateRange?.label != label {

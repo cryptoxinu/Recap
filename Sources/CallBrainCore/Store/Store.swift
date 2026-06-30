@@ -275,11 +275,24 @@ public final class Store: @unchecked Sendable {
                             utterances: [UtteranceInput] = [], entities: [EntityInput] = [],
                             tasks: [TaskInput] = []) throws {
         try dbQueue.write { db in
+            // UPSERT that UPDATEs in place on id conflict — NOT INSERT OR REPLACE, which DELETEs the
+            // parent row and cascade-wipes its tasks (incl. user-toggled done status), chunks, etc.
+            // (Codex P4 gate HIGH). Children are maintained explicitly below.
             try db.execute(sql: """
-                INSERT OR REPLACE INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
+                INSERT INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S','now'))
+                ON CONFLICT(id) DO UPDATE SET
+                  title=excluded.title, date=excluded.date, start_time=excluded.start_time,
+                  duration=excluded.duration, source=excluded.source, company=excluded.company,
+                  content_hash=excluded.content_hash, updated_at=excluded.updated_at
                 """, arguments: [m.id, m.title, m.date, m.startedAt.map(Self.iso),
                                  m.durationSeconds, m.source.rawValue, m.company, m.contentFingerprint])
+            // Re-save replaces DERIVED data (chunks → cascades embeddings/FTS; utterances; entities) so no
+            // stale rows linger — but NOT tasks, whose open/done status is user state (preserved via the
+            // INSERT OR IGNORE below). On a normal fresh-id ingest these deletes match nothing (no-op).
+            try db.execute(sql: "DELETE FROM transcript_chunks WHERE meeting_id = ?", arguments: [m.id])
+            try db.execute(sql: "DELETE FROM utterances WHERE meeting_id = ?", arguments: [m.id])
+            try db.execute(sql: "DELETE FROM meeting_entities WHERE meeting_id = ?", arguments: [m.id])
             for c in chunks {
                 try db.execute(sql: """
                     INSERT OR REPLACE INTO transcript_chunks

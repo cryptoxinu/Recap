@@ -27,21 +27,37 @@ public enum ActionItemExtractor {
         }
 
         for u in utterances {
-            let line = u.text.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty { continue }
-            if line.hasPrefix("## ") {
-                let title = String(line.dropFirst(3)).lowercased()
+            let raw = u.text.trimmingCharacters(in: .whitespaces)
+            if raw.isEmpty { continue }
+            if raw.hasPrefix("## ") {
+                let title = String(raw.dropFirst(3)).lowercased()
                 inActionSection = sectionSignals.contains { title.contains($0) }
                 continue
             }
+            // Strip a leading bullet glyph BEFORE owner detection, so `• [Ghazal] …` still attributes
+            // to Ghazal instead of becoming an unassigned `[Ghazal] …` line (Codex P4 gate MED).
+            var line = raw
+            for glyph in ["•", "◦", "-", "*"] where line.hasPrefix(glyph) {
+                line = String(line.dropFirst(glyph.count)).trimmingCharacters(in: .whitespaces); break
+            }
+            if isNegative(line) { continue }                 // "No action items were identified." etc.
             if let owned = ownerLine(line) {
                 add(Extracted(owner: owned.owner, text: owned.text))
-            } else if inActionSection {
-                let clean = line.hasPrefix("•") ? String(line.dropFirst()).trimmingCharacters(in: .whitespaces) : line
-                if clean.count >= 3 { add(Extracted(owner: nil, text: clean)) }
+            } else if inActionSection, line.count >= 3 {
+                add(Extracted(owner: nil, text: line))
             }
         }
         return out
+    }
+
+    /// "No action items / none / N/A / nothing to do" placeholders are not tasks. Kept narrow so a real
+    /// task ("Notify Travis…", "No longer pursue Meow — confirm with Max") isn't filtered.
+    static func isNegative(_ s: String) -> Bool {
+        let t = s.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " .!"))
+        if t == "none" || t == "n/a" || t == "na" || t == "nothing" { return true }
+        return (t.contains("no action") || t.contains("none identified")
+                || t.contains("nothing to") || t.contains("no follow-up") || t.contains("no follow up")
+                || t.contains("no tasks")) && t.count < 60
     }
 
     /// `[Owner] the task text` → (owner, text). Owner must be short and non-empty.
