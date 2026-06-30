@@ -49,8 +49,13 @@ public struct OllamaEmbedder: Embedder {
             throw EmbedError.decode("missing embeddings[] in Ollama response")
         }
         let vectors = arrs.map { row in row.compactMap { ($0 as? NSNumber)?.floatValue } }
-        if let first = vectors.first, first.count != dim {
-            throw EmbedError.dimMismatch(expected: dim, got: first.count)
+        // Validate EVERY vector (Codex audit fix) + the batch count, so a short/ragged provider
+        // response can't silently corrupt the index.
+        guard vectors.count == texts.count else {
+            throw EmbedError.decode("Ollama returned \(vectors.count) embeddings for \(texts.count) inputs")
+        }
+        for v in vectors where v.count != dim {
+            throw EmbedError.dimMismatch(expected: dim, got: v.count)
         }
         return vectors
     }

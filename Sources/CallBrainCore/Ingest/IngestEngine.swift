@@ -1,6 +1,10 @@
 import Foundation
 import CryptoKit
 
+public enum IngestError: Error, Sendable, Equatable {
+    case embeddingCountMismatch(expected: Int, got: Int)
+}
+
 /// Ties the ingestion pipeline together (docs/ARCHITECTURE.md §6): a parsed transcript →
 /// CTM utterances → speaker-turn chunks → embeddings → persisted + searchable. Phase 1 takes an
 /// explicit source (Fireflies/Fathom); the auto-detecting router + durable state machine land in Phase 2.
@@ -41,6 +45,10 @@ public struct IngestEngine: Sendable {
 
         // Embed all chunk texts in one batch (document side of the single embedding model).
         let vectors = chunks.isEmpty ? [] : try await embedder.embed(chunks.map(\.text), kind: .document)
+        // Never persist a partially-embedded meeting (Codex audit fix): every chunk must get a vector.
+        guard vectors.count == chunks.count else {
+            throw IngestError.embeddingCountMismatch(expected: chunks.count, got: vectors.count)
+        }
 
         let meeting = Meeting(
             id: meetingID,
@@ -59,15 +67,13 @@ public struct IngestEngine: Sendable {
         }
         try store.saveMeeting(meeting, chunks: inputs)
 
-        var embedded = 0
-        for (i, ch) in chunks.enumerated() where i < vectors.count {
+        for (i, ch) in chunks.enumerated() {
             try store.saveEmbedding(chunkID: "\(meetingID)_c\(ch.seq)", space: space, dim: embedder.dim,
                                     modelID: embedder.modelID, vector: vectors[i],
                                     contentHash: "sha256:" + Self.sha256(ch.text))
-            embedded += 1
         }
 
-        return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: embedded)
+        return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: chunks.count)
     }
 
     static func sha256(_ s: String) -> String {

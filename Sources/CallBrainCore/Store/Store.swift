@@ -5,6 +5,10 @@ import GRDB
 /// `meetings`, `transcript_chunks`, a standalone trigger-synced `chunks_fts` (FTS5/BM25), and an
 /// `embeddings` registry that stores vectors as BLOBs for the V1 brute-force-cosine lane (sqlite-vec /
 /// usearch graduate later, §0 D5). The vector arm is added once the embedding model is wired.
+public enum StoreError: Error, Sendable, Equatable {
+    case corruptEmbedding(chunkID: String)
+}
+
 public final class Store: @unchecked Sendable {
     // @unchecked: GRDB's DatabaseQueue is internally thread-safe; we hold it immutably.
     private let dbQueue: DatabaseQueue
@@ -183,9 +187,12 @@ public final class Store: @unchecked Sendable {
     /// All stored vectors for an embedding space, optionally restricted to a candidate `chunkIDs` set
     /// (the D6 selectivity-routed path: pre-filter in SQL, then exact brute-force over the subset).
     public func vectors(space: String, chunkIDs: [String]? = nil) throws -> [(id: String, vector: [Float])] {
-        try dbQueue.read { db in
+        // Semantics (Codex audit fix): nil = whole space; [] = NO candidates (an empty hard-filter
+        // result must not fall through to "all vectors" and leak out-of-scope evidence).
+        if let ids = chunkIDs, ids.isEmpty { return [] }
+        return try dbQueue.read { db in
             let rows: [Row]
-            if let ids = chunkIDs, !ids.isEmpty {
+            if let ids = chunkIDs {        // non-empty (guarded above)
                 let placeholders = ids.map { _ in "?" }.joined(separator: ",")
                 rows = try Row.fetchAll(db, sql:
                     "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ? AND chunk_id IN (\(placeholders))",
@@ -194,10 +201,13 @@ public final class Store: @unchecked Sendable {
                 rows = try Row.fetchAll(db, sql:
                     "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ?", arguments: [space])
             }
-            return rows.compactMap { r in
+            // A corrupt blob is a data-integrity error → surface it (never silently drop an in-scope chunk).
+            return try rows.map { r in
                 let dim: Int = r["dim"]
                 let blob: Data = r["vector"]
-                guard let v = VectorMath.decode(blob, dim: dim) else { return nil }
+                guard let v = VectorMath.decode(blob, dim: dim) else {
+                    throw StoreError.corruptEmbedding(chunkID: r["chunk_id"])
+                }
                 return (id: r["chunk_id"], vector: v)
             }
         }

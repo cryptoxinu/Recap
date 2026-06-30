@@ -79,6 +79,29 @@ struct SearchEngineTests {
         #expect(r.allSatisfy { !$0.text.isEmpty })
     }
 
+    @Test("empty candidate set returns nothing (no out-of-scope leak) — Codex fix")
+    func emptyCandidateScopesOut() async throws {
+        let store = try freshStore()
+        let embedder = StubEmbedder()
+        let space = "stub__v1"
+        try await seed(store, embedder: embedder, space: space)
+        let engine = SearchEngine(store: store, embedder: embedder, space: space)
+        let r = try await engine.hybrid("Render GPU pricing", candidateChunkIDs: [])
+        #expect(r.isEmpty)
+    }
+
+    @Test("candidate set scopes BOTH lanes, not just vector — Codex fix")
+    func candidateScopesBothLanes() async throws {
+        let store = try freshStore()
+        let embedder = StubEmbedder()
+        let space = "stub__v1"
+        try await seed(store, embedder: embedder, space: space)
+        let engine = SearchEngine(store: store, embedder: embedder, space: space)
+        // Restrict to the validator chunk only; a Render keyword query must NOT surface c_render via FTS.
+        let r = try await engine.hybrid("Render GPU pricing", candidateChunkIDs: ["c_val"])
+        #expect(r.allSatisfy { $0.chunkID == "c_val" })
+    }
+
     // Opt-in live Ollama embedding (needs `ollama serve` + `ollama pull nomic-embed-text`):
     //   CALLBRAIN_LIVE_OLLAMA=1 swift test --filter SearchEngine
     @Test("live Ollama nomic embedding returns a 768-vector",

@@ -69,14 +69,19 @@ enum Subprocess {
                 cont.resume(throwing: LLMError.launchFailed("\(executable): \(error.localizedDescription)"))
                 return
             }
-            if let stdin { h.inp.fileHandleForWriting.write(Data(stdin.utf8)) }
-            try? h.inp.fileHandleForWriting.close()
 
+            // START THE DRAINS FIRST (Codex audit fix): with a large prompt, the child can emit stdout/
+            // stderr while we're still writing stdin. Draining concurrently before the stdin write
+            // prevents a pipe-buffer deadlock.
             let group = DispatchGroup()
             group.enter()
             DispatchQueue.global().async { h.outBuf.set(h.out.fileHandleForReading.readDataToEndOfFile()); group.leave() }
             group.enter()
             DispatchQueue.global().async { h.errBuf.set(h.err.fileHandleForReading.readDataToEndOfFile()); group.leave() }
+
+            // Now feed stdin (the child drains it as it reads the prompt) and close.
+            if let stdin { h.inp.fileHandleForWriting.write(Data(stdin.utf8)) }
+            try? h.inp.fileHandleForWriting.close()
 
             let watchdog = DispatchWorkItem { if h.process.isRunning { h.timedOut.set(); h.process.terminate() } }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
@@ -109,6 +114,12 @@ final class FlagBox: @unchecked Sendable {
     func set() { lock.lock(); v = true; lock.unlock() }
     var value: Bool { lock.lock(); defer { lock.unlock() }; return v }
 }
+/// Holds the subprocess state shared across drain/wait/watchdog queues.
+/// @unchecked Sendable invariant (Codex audit #6): only thread-safe `Process` operations cross
+/// threads — `run()` (once, before any queue work), `isRunning`/`terminate()`/`waitUntilExit()`/
+/// `terminationStatus` (documented safe to call concurrently) — and the captured buffers/flag are
+/// lock-guarded (`DataBox`/`FlagBox`). The `Pipe` file handles are each drained by exactly one queue.
+/// Follow-up: migrate to apple/swift-subprocess for compiler-checked confinement.
 final class ProcHolder: @unchecked Sendable {
     let process = Process()
     let out = Pipe(); let err = Pipe(); let inp = Pipe()

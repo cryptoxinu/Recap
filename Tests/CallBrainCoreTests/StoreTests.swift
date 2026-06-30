@@ -70,6 +70,18 @@ struct StoreTests {
         #expect(hits.first?.text.contains("inference hardware") == true)
     }
 
+    @Test("vectors scoping: nil = all, [] = none, [ids] = subset — Codex fix")
+    func vectorScoping() throws {
+        let store = try tempStore()
+        let m = Meeting(id: "m1", title: "t", date: "2026-05-14", source: .fathom)
+        try store.saveMeeting(m, chunks: [chunk("c0", "m1", 0, "A", "x", 0), chunk("c1", "m1", 1, "B", "y", 1)])
+        try store.saveEmbedding(chunkID: "c0", space: "s", dim: 2, modelID: "m", vector: [1, 0], contentHash: "h0")
+        try store.saveEmbedding(chunkID: "c1", space: "s", dim: 2, modelID: "m", vector: [0, 1], contentHash: "h1")
+        #expect(try store.vectors(space: "s").count == 2)                       // nil = all
+        #expect(try store.vectors(space: "s", chunkIDs: []).isEmpty)            // [] = none
+        #expect(try store.vectors(space: "s", chunkIDs: ["c0"]).map(\.id) == ["c0"])
+    }
+
     @Test("FTS sanitizer neutralizes punctuation and operator words")
     func sanitizer() {
         #expect(Store.sanitizeFTS("Render!") == "\"render\"")
