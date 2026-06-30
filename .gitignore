@@ -1,0 +1,51 @@
+# ── CallBrain ignore rules ──────────────────────────────────────────────
+
+# User data: NEVER commit recordings, transcripts, the DB, or vectors.
+# Folder structure is tracked via .gitkeep; contents are not.
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# Python / backend
+backend/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.uv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Models (downloaded weights: whisper, embeddings, etc.)
+data/models/**
+!data/models/.gitkeep
+
+# Local DBs / vector stores
+*.sqlite
+*.sqlite3
+*.db
+*.lance
+*.lancedb/
+
+# macOS / Xcode / SwiftPM
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+# NOTE: Package.resolved IS committed (pins dependency versions).
+
+# Secrets / handshake artifacts (should live in Keychain / App Support, never repo)
+*.token
+.env
+.env.*
+!.env.example
+
+# Logs
+data/logs/**
+!data/logs/.gitkeep
+*.log

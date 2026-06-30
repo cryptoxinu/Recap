@@ -1,0 +1,30 @@
+// swift-tools-version: 6.0
+import PackageDescription
+
+// CallBrain core engine as a headless, testable SwiftPM library.
+// The macOS SwiftUI app target (signing, entitlements, app bundle) is added in an
+// Xcode project later (Phase 1 UI); all logic lives here so it can `swift build` +
+// `swift test` from the CLI with no Xcode/UI ceremony.
+//
+// Platform floor is .macOS(.v14) for the pure-logic core (it uses no macOS-26-only
+// APIs). The app target will raise to macOS 26. External deps (GRDB, WhisperKit,
+// FluidAudio, swift-embeddings, swift-subprocess, Sparkle) are added per-phase in
+// docs/PHASE-PLAN.md so each addition is independently auditable.
+let package = Package(
+    name: "CallBrain",
+    platforms: [.macOS(.v14)],
+    products: [
+        .library(name: "CallBrainCore", targets: ["CallBrainCore"]),
+    ],
+    targets: [
+        .target(
+            name: "CallBrainCore",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "CallBrainCoreTests",
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+    ]
+)

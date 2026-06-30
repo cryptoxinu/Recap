@@ -1,0 +1,80 @@
+[
+  {
+    "area": "Privacy threat model vs LLM provider (CLI subprocess)",
+    "severity": "high",
+    "issue": "The doc's justification framework leans on 'private, local-first, an app holding years of private crypto calls' (used to reject allow-unsigned-executable-memory, justify SQLCipher), yet the core Ask-AI feature pipes retrieved transcript chunks to `claude -p` / `codex exec`, which are CLOUD calls to Anthropic/OpenAI. Confidential meeting content egresses off-device on every RAG answer. This contradiction is never surfaced, and there is no shipped local-LLM generation path (ollama is 'dev-only, not shipped').",
+    "fix": "Add an explicit data-egress section: state Ask-AI sends retrieved context to a third-party cloud LLM, document what is/isn't sent (redaction, chunk minimization), and either offer a shipped local-LLM generation option for a true local-only mode or reframe 'private/local-first' to 'local index, cloud generation' so the threat model is honest."
+  },
+  {
+    "area": "Transcription \u2014 WhisperKit WER claim",
+    "severity": "high",
+    "issue": "The table presents '1.71% WER measured' as the headline quality number for large-v3-turbo. Argmax's own WhisperKit paper reports ~2.2% WER for large-v3-turbo; 1.71% appears to be a full large-v3 (non-turbo) or clean-read dataset figure, not the turbo variant. Either way, clean-read WER is near-meaningless for the operative workload (multi-speaker crypto VoIP with crosstalk, accents, jargon, codec degradation). The headline launders a clean benchmark as the decision-grade quality metric.",
+    "fix": "Replace the headline with the correct turbo-variant number plus dataset/protocol citation (the ~2.2% turbo figure), label it 'clean-read benchmark, not representative,' and elevate the \u00a76 on-device crypto-call WER spot-check (glossary-biased) to the binding gate before any quality claim."
+  },
+  {
+    "area": "Diarization \u2014 DER provenance + weights license/gating",
+    "severity": "high",
+    "issue": "Two unverified claims ride on one row. (1) '10.6% DER AMI-SDM' is a meeting-room single-distant-mic benchmark with no representativeness to 4\u20138-speaker crypto VoIP crosstalk; the operative DER could be far worse. (2) License is stated 'CC-BY-4.0 (ungated), no HF token' \u2014 but pyannote speaker-diarization-community-1 carries an extra_gated_prompt and requires HF login/acceptance (it IS gated), and CC-BY-4.0 imposes attribution. 'Ungated / no HF token' only plausibly holds via FluidAudio's re-hosted CoreML mirror, whose relicensing chain (gated upstream \u2192 CC-BY mirror) is asserted, not verified.",
+    "fix": "Mark 10.6% DER as 'AMI-SDM benchmark, NOT representative' and make the \u00a76 real-crypto-call DER the binding gate. Correct the license to 'CC-BY-4.0, upstream gated on HF; FluidAudio CoreML mirror redistribution to be verified license-clean,' and confirm the attribution notice satisfies CC-BY-4.0 for the exact mirror shipped."
+  },
+  {
+    "area": "Embeddings \u2014 throughput realism at 100k\u20131M chunks",
+    "severity": "high",
+    "issue": "'44K tok/s' is a large-batch/server-class number (doc concedes 'likely large-batch'), but a 0.6B causal decoder with last-token pooling needs a full forward pass per chunk, and large batching fights the idle-RAM/'butter' goals. The \u00a76 throughput verify is scoped only to 'tens of thousands' while \u00a75 scale math says ~125\u2013300k and 'occasionally nearing 1M.' A manifest version bump or nomic downshift forces a full re-embed of the whole corpus into a new versioned table \u2014 at 1M chunks the 'atomic-swap after verification' could be a multi-hour batch never budgeted. The small-batch-for-butter vs large-batch-for-throughput tension is unreconciled.",
+    "fix": "Add full-corpus (re-)embed time estimates at 1M chunks under both small-batch (interactive) and large-batch (bulk) regimes; specify a throttled/resumable background re-index strategy with progress; extend the \u00a76 throughput gate to ~1M, not just 'tens of thousands.'"
+  },
+  {
+    "area": "'Python eliminated' scope overclaim",
+    "severity": "high",
+    "issue": "The claim is only true for the shipped .app bundle. Python remains in (a) the acknowledged opt-in diarization helper, and (b) the unacknowledged model-prep supply chain: producing/obtaining the Qwen3-Embedding-0.6B-4bit-DWQ artifact (MLX DWQ quantization is Python), any CoreML re-conversion (coremltools is Python), and the \u00a76 'cosine \u2265 0.999 vs reference HF Qwen3' parity check (PyTorch/transformers). The headline 'Python eliminated' is broader than the defensible 'no Python in the .app.'",
+    "fix": "Restate as 'zero Python in the shipped .app and hot path,' then add a 'dev/model-prep toolchain' note listing the Python steps (quantization, conversion, parity reference) so the supply-chain dependency and reproducibility are explicit."
+  },
+  {
+    "area": "MLX-Swift under hardened runtime \u2014 entitlement verification",
+    "severity": "high",
+    "issue": "A central pillar of the E-over-B verdict is 'pure Swift + CoreML/MLX notarizes clean, no allow-unsigned-executable-memory minefield.' But MLX runtime-compiles Metal compute kernels, and the doc asserts MLX notarizes clean WITHOUT a specific check that MLX-Swift needs no com.apple.security.cs.allow-jit (or unsigned-executable-memory) entitlement under hardened runtime. If MLX-Swift requires such an entitlement, it erodes the very advantage the verdict claims over the Python path.",
+    "fix": "Add a \u00a76 gate: confirm the MLX-Swift embedding path notarizes and runs under hardened runtime with NO allow-jit / allow-unsigned-executable-memory entitlement on the target Mac; if any is required, prefer the swift-embeddings/CoreML (MLTensor) path as default and document the entitlement rather than asserting 'clean.'"
+  },
+  {
+    "area": "sqlite-vec static-compile \u2014 GRDB build integration",
+    "severity": "medium",
+    "issue": "The notarization concern itself is handled correctly (static-compiling the amalgamation to avoid loadable-extension/library-validation is the right call). But the integration cost is glossed: static-compiling sqlite-vec means you cannot use system libsqlite3/default GRDB \u2014 you must use the custom-SQLite GRDB build (GRDBCustomSQLite/SQLCipher), compile sqlite-vec's C source into that same amalgamation, and register sqlite3_vec_init via auto-extension. 'Optional SQLCipher' + sqlite-vec + FTS5 must be ONE custom SQLite build; the doc lists them as separate options without noting they cannot be mixed a la carte.",
+    "fix": "Document the concrete build path (GRDBCustomSQLite or SQLCipher amalgamation with sqlite-vec + FTS5 compiled in, SQLITE_CORE, auto-extension registration) and make the \u00a76 gate assert the custom build links AND that FTS5 + sqlite-vec + (optional) SQLCipher coexist in the same single library."
+  },
+  {
+    "area": "Embedder lifecycle vs search latency",
+    "severity": "medium",
+    "issue": "\u00a74 says engines 'unload when idle' to hit idle RAM < 150MB, but Cmd-K search must embed the query, requiring the ~300MB+ Qwen3-0.6B-4bit embedder resident. If it unloads on idle, the first search after idle pays a model-reload cost (hundreds of ms to seconds), directly conflicting with the snappy-search/'butter' goal. The doc never reconciles 'unload when idle' with 'search must be instant.'",
+    "fix": "Define an explicit warm-window/keep-alive policy for the embedder (keep resident N minutes after last query, or keep the small nomic/ANE encoder warm for query-embedding while unloading the heavy doc-embedder), and add cold-vs-warm first-query latency to the \u00a76 instruments gate."
+  },
+  {
+    "area": "First-run / offline transcription availability",
+    "severity": "medium",
+    "issue": "Both transcription paths are download-on-first-run: WhisperKit (~626MB from HF) and Apple SpeechTranscriber (system-managed asset, also downloaded on first use, not bundled). The doc frames SpeechTranscriber as the bridge 'while WhisperKit downloads' and as 'zero bundle' \u2014 but on a fresh, offline machine NEITHER works, so a 'local-first' app has zero transcription capability until network + asset availability. 'Zero app RAM' for SpeechTranscriber also overstates (out-of-proc but still consumes disk + system memory).",
+    "fix": "State the online-first-run dependency explicitly, define offline/first-run UX (queue recordings, clear messaging), consider bundling a small fallback model, and verify SpeechTranscriber asset availability/latency on a clean machine as a \u00a76 item."
+  },
+  {
+    "area": "Retrieval \u2014 HNSW predicate pre-filter recall",
+    "severity": "medium",
+    "issue": "The vector arm is specified as 'usearch, k=50, predicate pre-filter.' Metadata/date-filtered ANN over HNSW is a known recall hazard: at high filter selectivity the graph traversal may not reach enough matching nodes, silently degrading recall@10. The \u00a76 recall gate tests unfiltered recall at corpus size but does not cover filtered queries \u2014 exactly what 'search within this meeting / date range' will exercise.",
+    "fix": "Add a \u00a76 sub-gate measuring recall@10 under realistic predicate selectivity (single-meeting, narrow date ranges); if filtered recall collapses, document the fallback (over-fetch + post-filter, or route highly-selective filters to the FTS5/brute-force arm or sqlite-vec)."
+  },
+  {
+    "area": "Embeddings \u2014 DWQ artifact availability",
+    "severity": "medium",
+    "issue": "'Qwen3-Embedding-0.6B-4bit-DWQ' is cited as the shipped runtime model id as if off-the-shelf, but DWQ is an MLX (Python) quantization/distillation process. If no maintained public DWQ artifact exists for this exact model, the founder must run a Python DWQ pipeline (calibration data + mlx tooling) to produce it \u2014 a supply-chain/availability dependency the doc treats as solved.",
+    "fix": "Verify the exact DWQ artifact exists and is maintained (pin repo + revision in the index manifest), or document the reproducible Python DWQ build step and a non-DWQ fallback quantization so the embedding model isn't blocked on a single community artifact."
+  },
+  {
+    "area": "Transcription \u2014 runner-up justification accuracy",
+    "severity": "low",
+    "issue": "The WhisperKit-vs-whisper.cpp justification claims whisper.cpp has 'no ANE pipeline' and is '~1.3\u20131.8x slower.' whisper.cpp DOES support a CoreML/ANE encoder path (>3x faster than CPU per its own docs); the real ANE limitation is the decoder's dynamic shapes \u2014 a constraint WhisperKit's decoder shares. The speed multiplier is sourceless. The pick may still be right, but the stated reason is partly false.",
+    "fix": "Correct the rationale to the real differentiators (integrated ANE encoder+decoder pipeline, word timestamps, VAD chunking, MIT framework) and drop or source the '1.3\u20131.8x' and 'no ANE pipeline' claims."
+  },
+  {
+    "area": "Performance thresholds \u2014 display refresh assumption",
+    "severity": "low",
+    "issue": "The Animation-Hitches/CA-FPS gate uses 'frame time < 8.3ms (120Hz)' and '120fps' as the transcript-scroll bar, but 8.3ms only applies on a ProMotion display; on a 60Hz panel/external monitor the budget is 16.6ms. The 'target Mac' and its display refresh are never pinned, so the headline 'butter' bar may be either over-strict or untestable on the actual hardware.",
+    "fix": "Pin the target Mac + display (and external-monitor case) and state the frame budget per refresh rate (8.3ms@120Hz, 16.6ms@60Hz) so the acceptance gate is well-defined for the hardware that ships."
+  }
+]
