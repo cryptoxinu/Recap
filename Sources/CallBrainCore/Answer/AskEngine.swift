@@ -82,6 +82,7 @@ public struct AskEngine: Sendable {
 
         QUESTION: \(query)
 
+        \(Self.modeInstruction(plan.mode))
         Answer using ONLY the sources above, tagging each factual sentence with [S#]. \
         If they do not answer, reply exactly NO_SOURCED_EVIDENCE.
         """
@@ -105,6 +106,23 @@ public struct AskEngine: Sendable {
         }
         return Answer(status: .answered, text: text, citations: cited,
                       provider: .claude, model: completion.model, plan: plan)
+    }
+
+    /// Per-mode framing instruction (Phase 4). Keeps the same grounded-and-cited core; only the shape of
+    /// the answer changes. The deterministic `QueryPlanner.mode` chooses which one.
+    static func modeInstruction(_ mode: AskMode) -> String {
+        switch mode {
+        case .general:
+            return "Answer directly and concisely."
+        case .person:
+            return "Focus on what the named person actually said or committed to; attribute each point to them."
+        case .timeScoped:
+            return "Summarize the key updates, decisions, and open threads from this period as short bulleted points."
+        case .actionItems:
+            return "List the action items as a checklist. For EACH item state WHO owns it (in **bold**) and WHAT they must do. Group by owner. Include only tasks actually stated in the sources."
+        case .technical:
+            return "Explain clearly and precisely, defining any jargon. Prefer the sources that actually describe how it works."
+        }
     }
 
     /// The set of `S#` tags the answer actually references (from `[S#]` markers).
