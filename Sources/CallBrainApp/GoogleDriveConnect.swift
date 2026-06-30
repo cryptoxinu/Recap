@@ -126,16 +126,26 @@ final class GoogleDriveConnect {
     /// finishing the whole listing/download pass against a now-disconnected account).
     @ObservationIgnored private var syncGeneration = 0
 
+    /// Cached "an OAuth client (id+secret) is stored" flag — so `isConfigured` never does a (slow,
+    /// main-thread) Keychain read during a SwiftUI render. Reconciled off-main in init.
+    private(set) var hasClient: Bool
+
     static let folderIDKey = "callbrain.driveFolderID"
     static let folderNameKey = "callbrain.driveFolderName"
     static let includeSharedKey = "callbrain.driveIncludeShared"
+    static let connectedKey = "callbrain.driveConnected"
+    static let configuredKey = "callbrain.driveConfigured"
     static let syncedKey = "callbrain.driveSyncedKeys"
     static let syncedCap = 8000
 
     init(env: AppEnvironment) {
         self.env = env
         self.client = GoogleDriveClient(store: store)
-        self.connected = !((store.load()?.refreshToken).map { $0.isEmpty } ?? true)
+        // Read the cached flags (instant) instead of the Keychain — an unsigned-binary Keychain read costs
+        // ~6s and that was beachballing the launch. The Keychain is the source of truth; these mirrors are
+        // reconciled off-main right after launch (audit: launch-latency).
+        self.connected = UserDefaults.standard.bool(forKey: Self.connectedKey)
+        self.hasClient = UserDefaults.standard.bool(forKey: Self.configuredKey)
         self.folderID = UserDefaults.standard.string(forKey: Self.folderIDKey)
         self.folderName = UserDefaults.standard.string(forKey: Self.folderNameKey)
         self.includeShared = UserDefaults.standard.object(forKey: Self.includeSharedKey) as? Bool ?? true
@@ -143,6 +153,43 @@ final class GoogleDriveConnect {
         if connected, (!((folderID ?? "").isEmpty) || includeShared) {
             Task { [weak self] in await self?.syncNow() }
             startAutoSync()
+        }
+        // Existing users connected/configured BEFORE these flags existed have Keychain state but no cached
+        // flags yet. Read the real Keychain OFF-MAIN (slow on an unsigned binary) and self-heal — and if it
+        // flips us connected, kick the catch-up sync the fast path skipped. Keeps launch instant + honest.
+        let store = self.store
+        let gen = syncGeneration
+        Task.detached { [weak self] in
+            let cfg = store.load()
+            let real = !((cfg?.refreshToken).map { $0.isEmpty } ?? true)
+            let client = !((cfg?.clientID).map { $0.isEmpty } ?? true)
+            await self?.reconcileConnected(real, hasClient: client, gen: gen)
+        }
+    }
+
+    private func setConnected(_ v: Bool) {
+        syncGeneration &+= 1          // any transition invalidates in-flight syncs + stale reconciles
+        connected = v
+        UserDefaults.standard.set(v, forKey: Self.connectedKey)
+    }
+
+    private func setHasClient(_ v: Bool) {
+        hasClient = v
+        UserDefaults.standard.set(v, forKey: Self.configuredKey)
+    }
+
+    /// Reconcile the cached flags against the real Keychain (called off-main → hops back here on main).
+    /// `gen` is the sync generation captured before the off-main read; if the user connected or
+    /// disconnected meanwhile it will have changed, so we drop the now-stale snapshot (audit HIGH: race).
+    private func reconcileConnected(_ real: Bool, hasClient client: Bool, gen: Int) {
+        if client != hasClient { setHasClient(client) }
+        guard gen == syncGeneration, real != connected else { return }
+        setConnected(real)
+        if real, (!((folderID ?? "").isEmpty) || includeShared) {
+            startAutoSync()
+            Task { [weak self] in await self?.syncNow() }
+        } else if !real {
+            autoSyncTask?.cancel(); autoSyncTask = nil    // drop a timer started from a stale cached `true`
         }
     }
 
@@ -170,19 +217,24 @@ final class GoogleDriveConnect {
         Task { [weak self] in await self?.syncNow() }
     }
 
-    var isConfigured: Bool { !((store.load()?.clientID).map { $0.isEmpty } ?? true) }
+    var isConfigured: Bool { hasClient }     // cached — never a main-thread Keychain read during render
 
     /// Store the founder's Desktop-app OAuth client (id + secret). Not yet connected until `connect()`.
-    func configure(clientID: String, clientSecret: String) {
+    func configure(clientID: String, clientSecret: String) async {
         let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-        store.save(DriveCredentials(clientID: id, clientSecret: secret, refreshToken: ""))
+        let store = self.store
+        _ = await Task.detached { store.save(DriveCredentials(clientID: id, clientSecret: secret, refreshToken: "")) }.value
+        setHasClient(!id.isEmpty)
         status = "Client saved — now connect."
     }
 
     /// Run the loopback OAuth handshake and persist the refresh token.
     func connect() async {
-        guard let cfg = store.load(), !cfg.clientID.isEmpty else { status = "Enter your Google OAuth client first."; return }
+        let store = self.store
+        guard let cfg = await Task.detached(operation: { store.load() }).value, !cfg.clientID.isEmpty else {
+            status = "Enter your Google OAuth client first."; return
+        }
         let server = LoopbackServer()
         do {
             let verifier = GoogleOAuth.makeCodeVerifier()
@@ -218,7 +270,7 @@ final class GoogleDriveConnect {
             guard gotState == state else { status = "Sign-in failed (state mismatch)."; server.cancel(); return }
             try await client.connect(code: code, codeVerifier: verifier, redirectURI: redirect,
                                      clientID: cfg.clientID, clientSecret: cfg.clientSecret)
-            connected = true
+            setConnected(true)
             status = "Connected to Google Drive."
             await detectMeetRecordings()
             startAutoSync()
@@ -233,13 +285,15 @@ final class GoogleDriveConnect {
         // reconnecting is one tap. Also clear the selected folder + per-account dedupe set so reconnecting
         // to a DIFFERENT Google account doesn't reuse a stale folder id or skip that account's files (SME).
         autoSyncTask?.cancel(); autoSyncTask = nil
-        syncGeneration &+= 1                         // invalidate any in-flight syncNow
-        let cfg = store.load()
-        // Clear tokens THROUGH the actor so it's serialized with any in-flight refresh (no token resurrection).
-        Task { await client.disconnect(preservingConfig: cfg) }
+        // Clear tokens THROUGH the actor so it's serialized with any in-flight refresh (no token
+        // resurrection). Detached so the slow Keychain read+clear runs OFF-MAIN (it would freeze the UI on
+        // an unsigned binary otherwise). `setConnected(false)` bumps `syncGeneration`, so any in-flight
+        // syncNow aborts at its next `live()` check without needing a Keychain read.
+        let store = self.store, client = self.client
+        Task.detached { await client.disconnect(preservingConfig: store.load()) }
         folderID = nil; folderName = nil; availableFolders = []
         UserDefaults.standard.removeObject(forKey: Self.syncedKey)
-        connected = false
+        setConnected(false)
         status = "Disconnected."
     }
 

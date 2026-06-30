@@ -195,7 +195,8 @@ struct SettingsView: View {
                 Spacer()
                 Button("Cancel") { driveSetupShown = false }
                 Button("Save") {
-                    env.drive.configure(clientID: driveClientID, clientSecret: driveClientSecret)
+                    let id = driveClientID, secret = driveClientSecret
+                    Task { await env.drive.configure(clientID: id, clientSecret: secret) }
                     driveClientID = ""; driveClientSecret = ""; driveSetupShown = false
                 }
                 .buttonStyle(.borderedProminent)

@@ -73,10 +73,10 @@ final class AppEnvironment {
         self.providerPrimary = savedPrimary
         self.router = ProviderRouter(claude: claude, codex: codexRunner, primary: savedPrimary)
         self.importCoordinator = ImportCoordinator(env: self)
-        self.autoImport = FolderAutoImport(env: self)   // resumes watching a configured folder, if any
-        self.drive = GoogleDriveConnect(env: self)      // dormant unless the founder connected Google Drive
-        self.summaries = SummaryScheduler(env: self)    // battery-aware local-summary lifecycle
-        self.fathom = FathomConnect(env: self)          // dormant unless the founder connected Fathom
+        self.autoImport = FolderAutoImport(env: self)
+        self.drive = GoogleDriveConnect(env: self)
+        self.summaries = SummaryScheduler(env: self)
+        self.fathom = FathomConnect(env: self)
     }
 
     static let providerKey = "callbrain.providerPrimary"
