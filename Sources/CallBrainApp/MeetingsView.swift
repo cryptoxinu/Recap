@@ -13,20 +13,35 @@ struct MeetingsView: View {
     }
 
     var body: some View {
-        Group {
-            if meetings.isEmpty {
-                ContentUnavailableView("No meetings yet", systemImage: "calendar",
-                                       description: Text("Import a transcript to get started."))
-            } else {
-                Table(filtered) {
-                    TableColumn("Title", value: \.title)
-                    TableColumn("Date", value: \.date)
-                    TableColumn("Source", value: \.source)
+        NavigationStack {
+            Group {
+                if meetings.isEmpty {
+                    ContentUnavailableView("No meetings yet", systemImage: "calendar",
+                                           description: Text("Import a transcript to get started."))
+                } else {
+                    List(filtered) { m in
+                        NavigationLink(value: m.id) { row(m) }
+                    }
+                    .navigationDestination(for: String.self) { id in
+                        MeetingDetailView(meetingID: id)
+                    }
                 }
             }
+            .navigationTitle("Meetings")
+            .searchable(text: $query, prompt: "Search calls")
         }
-        .navigationTitle("Meetings")
-        .searchable(text: $query, prompt: "Search calls")
         .task { meetings = env.recentMeetings() }
+    }
+
+    private func row(_ m: Store.MeetingRow) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent).font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.title).bold().lineLimit(1)
+                Text("\(m.date) · \(m.source)").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
     }
 }

@@ -33,6 +33,11 @@ let package = Package(
             dependencies: ["CallBrainCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .executableTarget(
+            name: "cbseed",   // dev tool: ingest a file into a store path (for populating the app to verify UI)
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "CallBrainCoreTests",
             dependencies: ["CallBrainCore"],

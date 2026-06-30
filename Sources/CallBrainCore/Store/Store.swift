@@ -270,6 +270,33 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    public struct TranscriptRow: Sendable, Equatable, Identifiable {
+        public let id: String          // chunk_id
+        public let speaker: String?
+        public let tStart: Double?
+        public let text: String
+    }
+
+    /// Ordered transcript chunks for a meeting (for the Transcript Viewer).
+    public func transcript(meetingID: String) throws -> [TranscriptRow] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT chunk_id, speaker, start_timestamp, text FROM transcript_chunks
+                WHERE meeting_id = ? ORDER BY seq
+                """, arguments: [meetingID]).map {
+                    TranscriptRow(id: $0["chunk_id"], speaker: $0["speaker"],
+                                  tStart: $0["start_timestamp"], text: $0["text"])
+                }
+        }
+    }
+
+    public func meeting(id: String) throws -> MeetingRow? {
+        try dbQueue.read { db in
+            try Row.fetchOne(db, sql: "SELECT id, title, date, source FROM meetings WHERE id = ?", arguments: [id])
+                .map { MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"]) }
+        }
+    }
+
     public func meetingCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }
