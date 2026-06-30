@@ -13,6 +13,15 @@
 - `docs/research/` — the two full design-research passes + critic findings (provenance, never delete).
 - Memory anchor: `~/.claude/.../memory/callbrain_project_2026_06_29.md` (+ `MEMORY.md` index line).
 
+## ➕ Post-build iteration (2026-06-30) — Ask intelligence + web research + UX fixes
+Founder-driven refinement after BUILD COMPLETE. See `docs/audits/2026-06-30-ask-intelligence-and-research.md`.
+Highlights: **auto-import folder watch** (FSEvents) · transcript-open sidebar-clip bug fixed · **Fireflies-grade
+answers** (opus / Codex-high-reasoning) · **clickable inline citations** · **multi-turn follow-ups** ·
+**web research mode** (gated, Claude **and** Codex, injection-hardened) · web-source + call-source **collapsed
+dropdowns** · **background generation + Stop button** · **Light/Dark selector**. swift-macos-SME-reviewed
+(C1 Stop crash, H2 research re-enabled hooks, H3 stop/resend race, H4 citation-link render — all fixed).
+**139 tests green.** All screenshot-verified live.
+
 ## 🎉 BUILD COMPLETE — all phases 0–8 + 4.5 shipped & gated (2026-06-30)
 **The entire PHASE-PLAN is done.** 135 tests green, ~78 commits on `main`. Every phase Codex-audited
 (P7+P8 codex gates hung → rigorous self-review; P0–P6 + 4.5 all codex/SME-gated). What works, end-to-end,

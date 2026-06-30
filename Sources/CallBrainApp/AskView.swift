@@ -5,9 +5,10 @@ import CallBrainCore
 /// to the chat panel (Phase 4.5). New chats auto-save and appear in Recents.
 struct AskView: View {
     @Environment(AppEnvironment.self) private var env
-    @State private var chat = ChatModel()
     @State private var renaming: Conversation?
     @State private var renameText = ""
+    // Shared, environment-owned chat so an in-flight answer survives leaving and returning to this tab.
+    private var chat: ChatModel { env.askChat }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -18,9 +19,17 @@ struct AskView: View {
         .navigationTitle("Ask AI")
         .task {
             chat.refreshRecents(env)
-            // Screenshot QA: CALLBRAIN_ASK=<question> auto-runs a query so the reasoning timeline renders.
+            // Screenshot QA: CALLBRAIN_ASK=<question> auto-runs a query; CALLBRAIN_ASK2=<follow-up> then runs
+            // a second turn that exercises conversation history (continuity).
             if let q = ProcessInfo.processInfo.environment["CALLBRAIN_ASK"], !q.isEmpty, chat.messages.isEmpty {
                 await chat.ask(q, env)
+                if let q2 = ProcessInfo.processInfo.environment["CALLBRAIN_ASK2"], !q2.isEmpty {
+                    await chat.ask(q2, env)
+                }
+            }
+            // Screenshot QA: CALLBRAIN_OPEN_RECENT=1 renders the most recent stored chat (no LLM call).
+            if ProcessInfo.processInfo.environment["CALLBRAIN_OPEN_RECENT"] == "1", let c = chat.recents.first {
+                chat.load(c, env)
             }
         }
         .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {

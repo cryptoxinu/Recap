@@ -68,6 +68,43 @@ struct AskEngineTests {
         #expect(AskEngine.referencedTags(in: "no tags here").isEmpty)
     }
 
+    @Test("retrievalQuery folds the prior question into a THIN follow-up, leaves a full question alone")
+    func retrievalQueryFollowUp() {
+        let hist = [AskEngine.Turn(role: .user, text: "What did Travis say about Render pricing?"),
+                    AskEngine.Turn(role: .assistant, text: "He said spot prices dropped [S1].")]
+        // thin follow-up → enriched with the last user question
+        let thin = AskEngine.retrievalQuery("what about Max?", history: hist)
+        #expect(thin.contains("Render pricing"))
+        #expect(thin.contains("what about Max?"))
+        // substantive question → stands on its own
+        let full = AskEngine.retrievalQuery("What were the BitRouter integration blockers this week?", history: hist)
+        #expect(full == "What were the BitRouter integration blockers this week?")
+        // anaphor in an otherwise long-ish question still pulls prior context (SME M6)
+        let anaphor = AskEngine.retrievalQuery("Did they ever resolve that whole pricing thing?", history: hist)
+        #expect(anaphor.contains("Render pricing"))
+        // no history → unchanged
+        #expect(AskEngine.retrievalQuery("anything", history: []) == "anything")
+    }
+
+    @Test("historyBlock is bounded (last 6 turns) and labels roles")
+    func historyBlockBounds() {
+        let turns = (0..<10).map { AskEngine.Turn(role: $0 % 2 == 0 ? .user : .assistant, text: "turn \($0)") }
+        let block = AskEngine.historyBlock(turns)
+        #expect(block.contains("turn 9"))
+        #expect(!block.contains("turn 3"))        // older than the last 6 → dropped
+        #expect(block.contains("User:") && block.contains("Assistant:"))
+        #expect(AskEngine.historyBlock([]).isEmpty)
+    }
+
+    @Test("looksLikeResearch fires on explicit web cues only")
+    func researchIntent() {
+        #expect(AskEngine.looksLikeResearch("Research Render online and relate it to our calls"))
+        #expect(AskEngine.looksLikeResearch("look this up on the web"))
+        #expect(AskEngine.looksLikeResearch("search online for OpenRouter pricing"))
+        #expect(!AskEngine.looksLikeResearch("What did we decide about pricing?"))
+        #expect(!AskEngine.looksLikeResearch("Summarize the morning sync"))
+    }
+
     // The money shot: real embeddings (Ollama) + real answer (claude), end to end.
     //   CALLBRAIN_LIVE=1 swift test --filter AskEngine
     @Test("LIVE end-to-end: ingest → ask → grounded cited answer",

@@ -58,6 +58,13 @@ public extension LLMProvider {
     }
 }
 
+/// A provider that can ALSO research the open web (only the Claude CLI — Codex runs network-sandboxed).
+/// Used ONLY for user-initiated "research online" requests, with just WebSearch+WebFetch enabled (no
+/// shell/file tools), so injected transcript or web content can never trigger code execution.
+public protocol WebResearchProvider: Sendable {
+    func completeWithWeb(prompt: String, system: String?, model: String, timeout: TimeInterval) async throws -> Completion
+}
+
 // MARK: - Subprocess (Swift-6-clean: non-Sendable Process/Pipe live inside an @unchecked Sendable holder)
 
 enum Subprocess {
@@ -81,8 +88,11 @@ enum Subprocess {
         h.process.standardError = h.err
         h.process.standardInput = h.inp
 
-        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Output, Error>) in
-            do { try h.process.run() }
+        // If the surrounding Task is cancelled (the chat Stop button), terminate the CLI child so it stops
+        // immediately instead of running to completion in the background.
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Output, Error>) in
+            do { try h.process.run(); h.markLaunched() }
             catch {
                 cont.resume(throwing: LLMError.launchFailed("\(executable): \(error.localizedDescription)"))
                 return
@@ -110,10 +120,8 @@ enum Subprocess {
             let watchdog = DispatchWorkItem {
                 guard h.process.isRunning else { return }
                 h.timedOut.set()
-                h.process.terminate()
-                DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-                    if h.process.isRunning { kill(h.process.processIdentifier, SIGKILL) }
-                }
+                h.terminateIfRunning()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 3) { h.killIfRunning() }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
@@ -130,6 +138,9 @@ enum Subprocess {
                                                   exitCode: h.process.terminationStatus))
                 }
             }
+        }
+        } onCancel: {
+            h.terminateIfRunning()   // Stop button → kill the child; lock-guarded + launch-aware (SME C1)
         }
     }
 }
@@ -155,4 +166,21 @@ final class ProcHolder: @unchecked Sendable {
     let process = Process()
     let out = Pipe(); let err = Pipe(); let inp = Pipe()
     let outBuf = DataBox(); let errBuf = DataBox(); let timedOut = FlagBox()
+
+    // Serialize process lifecycle (SME C1): the watchdog and Task-cancellation `onCancel` can both try to
+    // stop the child from different threads. Without this, a check-then-act on `isRunning` races, and
+    // `terminate()` on a never-launched Process raises an uncatchable ObjC exception.
+    private let lifecycle = NSLock()
+    private var launched = false
+    func markLaunched() { lifecycle.lock(); launched = true; lifecycle.unlock() }
+    func terminateIfRunning() {
+        lifecycle.lock(); defer { lifecycle.unlock() }
+        guard launched, process.isRunning else { return }
+        process.terminate()
+    }
+    func killIfRunning() {
+        lifecycle.lock(); defer { lifecycle.unlock() }
+        guard launched, process.isRunning else { return }
+        kill(process.processIdentifier, SIGKILL)
+    }
 }

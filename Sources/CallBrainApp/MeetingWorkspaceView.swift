@@ -16,11 +16,18 @@ struct MeetingWorkspaceView: View {
     }
 
     var body: some View {
-        HSplitView {
-            MeetingDetailView(meetingID: meetingID, highlightChunkID: focusChunkID)
-                .frame(minWidth: 460, idealWidth: 720)
-            askFred
-                .frame(minWidth: 320, idealWidth: 380, maxWidth: 520)
+        // A width-respecting split: panes always sum to EXACTLY the available width. (HSplitView honored
+        // its panes' greedy ideal widths and overflowed the navigation column, clipping the app sidebar
+        // off the left edge — founder bug 2026-06-30.) AskFred docks at a sensible fraction, capped.
+        GeometryReader { geo in
+            let askWidth = min(440, max(320, geo.size.width * 0.36))
+            HStack(spacing: 0) {
+                MeetingDetailView(meetingID: meetingID, highlightChunkID: focusChunkID)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                askFred
+                    .frame(width: askWidth)
+            }
         }
         .task { chat.refreshRecents(env) }
     }

@@ -13,8 +13,36 @@ final class ChatModel {
     var saveFailed = false                  // true if a turn couldn't be persisted (shown in the UI)
     private(set) var conversationID: String?
     let meetingID: String?
+    /// The in-flight generation. Owned by the model (not the view), so navigating away doesn't cancel it;
+    /// cancelling it (Stop) terminates the underlying CLI subprocess too. `generation` is a monotonic token:
+    /// a turn only cleans up `busy`/`task` if it's STILL the current generation, so a stopped-then-resent
+    /// turn's late unwind can't clobber the new turn's state (SME H3).
+    private var task: Task<Void, Never>?
+    private var generation = 0
 
     init(meetingID: String? = nil) { self.meetingID = meetingID }
+
+    /// Fire-and-forget a question — returns immediately; the answer streams into `messages` in the
+    /// background and survives view teardown. Ignored if a generation is already running.
+    func send(_ text: String, _ env: AppEnvironment, research: Bool = false) {
+        guard task == nil else { return }
+        generation += 1
+        let gen = generation
+        let q = text
+        task = Task { [weak self] in await self?.ask(q, env, research: research, gen: gen) }
+    }
+
+    /// Stop the current generation (kills the CLI subprocess via Task cancellation) and finalize the
+    /// half-written turn so the UI doesn't sit on a spinner. Bumps `generation` so the cancelled turn's
+    /// trailing `defer` is a no-op.
+    func stop() {
+        task?.cancel(); task = nil; busy = false; generation += 1
+        if let i = messages.firstIndex(where: { $0.pending }) {
+            messages[i].pending = false
+            if messages[i].text.isEmpty || messages[i].text == "Thinking…" { messages[i].text = "_Stopped._" }
+            messages[i].status = "stopped"
+        }
+    }
 
     func refreshRecents(_ env: AppEnvironment) {
         recents = meetingID == nil
@@ -45,11 +73,22 @@ final class ChatModel {
         refreshRecents(env)
     }
 
-    func ask(_ text: String, _ env: AppEnvironment) async {
+    func ask(_ text: String, _ env: AppEnvironment, research requested: Bool = false, gen explicitGen: Int? = nil) async {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty, !busy else { return }
+        guard !q.isEmpty else { return }
+        let gen: Int
+        if let explicitGen { gen = explicitGen } else { generation += 1; gen = generation }
         busy = true
-        defer { busy = false }
+        defer { if generation == gen { busy = false; task = nil } }   // only if still the current turn (H3)
+        // Web research is a global-chat capability (the per-call AskFred stays scoped to that call).
+        let useResearch = meetingID == nil && (requested || AskEngine.looksLikeResearch(q))
+
+        // Conversation continuity: feed the prior turns (before this question) back into the engine, so a
+        // follow-up ("dig into that", "what about the other call") keeps context across the thread.
+        let history: [AskEngine.Turn] = messages.compactMap { m in
+            guard !m.pending, !m.text.isEmpty else { return nil }
+            return AskEngine.Turn(role: m.role == .user ? .user : .assistant, text: m.text)
+        }
 
         // Ensure a conversation exists (auto-titled from the first question). nil = couldn't persist;
         // the chat still works in-memory but we DON'T pretend it's saved (Codex P4.5 gate HIGH).
@@ -69,9 +108,15 @@ final class ChatModel {
         }
 
         do {
-            let ans = meetingID == nil
-                ? try await env.ask.ask(q, onStep: onStep)
-                : try await env.ask.ask(q, inMeeting: meetingID!, onStep: onStep)
+            let ans: AskEngine.Answer
+            if useResearch {
+                ans = try await env.ask.research(q, history: history, onStep: onStep)
+            } else if meetingID == nil {
+                ans = try await env.ask.ask(q, history: history, onStep: onStep)
+            } else {
+                ans = try await env.ask.ask(q, inMeeting: meetingID!, history: history, onStep: onStep)
+            }
+            if Task.isCancelled || generation != gen { return }   // stopped/superseded — discard result (H3)
             let cites = ans.citations.map {
                 Cite(tag: $0.tag, meetingID: $0.meetingID, chunkID: $0.chunkID,
                      summary: "\($0.speaker ?? "Unknown") — \($0.text.prefix(80))…")
@@ -92,6 +137,7 @@ final class ChatModel {
             if let convID { persist(.assistant, text: ans.text, citations: stored, conversationID: convID, env) }
             refreshRecents(env)
         } catch {
+            if Task.isCancelled || generation != gen { return }   // stopped/superseded — not an error to surface
             if let i = messages.firstIndex(where: { $0.id == pid }) {
                 messages[i].text = "Couldn't answer: \(error.localizedDescription)"
                 messages[i].pending = false

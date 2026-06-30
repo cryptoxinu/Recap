@@ -5,7 +5,7 @@ import Foundation
 /// piped on stdin (handles long RAG prompts past ARG_MAX); the final assistant message is captured via
 /// `--output-last-message <file>` (clean, vs parsing the verbose session log). `-s read-only` +
 /// `--skip-git-repo-check` keep it side-effect-free and injection-inert.
-public actor CodexRunner: LLMProvider {
+public actor CodexRunner: LLMProvider, WebResearchProvider {
     public let executablePath: String
     public let sandboxDir: String
     /// The codex model (nil = codex's built-in default). The protocol's `model:` param is a Claude-centric
@@ -29,7 +29,9 @@ public actor CodexRunner: LLMProvider {
     /// auth still uses the CODEX_HOME subscription). Output captured to a private last-message file.
     static func baseArgs(cwd: String, outFile: String, model: String?) -> [String] {
         var a = ["exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
-                 "--ignore-user-config", "--cd", cwd, "-o", outFile]
+                 "--ignore-user-config",
+                 "-c", "model_reasoning_effort=high",   // max thinking → answer quality parity with Claude/opus
+                 "--cd", cwd, "-o", outFile]
         if let model, !model.isEmpty { a += ["-m", model] }
         return a
     }
@@ -37,6 +39,15 @@ public actor CodexRunner: LLMProvider {
     public func complete(prompt: String, system: String? = nil,
                          model: String = "", timeout: TimeInterval = 120) async throws -> Completion {
         let text = try await runCapture(fullPrompt: Self.merge(system, prompt), extraArgs: [], timeout: timeout)
+        return Completion(text: text, provider: .codex, model: codexModel ?? "codex", usage: TokenUsage(), costUSD: 0)
+    }
+
+    /// Web-research call (user-initiated): enables Codex's native `web_search` tool (hosted, so it works
+    /// under the read-only sandbox). Same scrubbed subscription auth; no shell/file writes.
+    public func completeWithWeb(prompt: String, system: String? = nil,
+                                model: String = "", timeout: TimeInterval = 240) async throws -> Completion {
+        let text = try await runCapture(fullPrompt: Self.merge(system, prompt),
+                                        extraArgs: ["-c", "tools.web_search=true"], timeout: timeout)
         return Completion(text: text, provider: .codex, model: codexModel ?? "codex", usage: TokenUsage(), costUSD: 0)
     }
 

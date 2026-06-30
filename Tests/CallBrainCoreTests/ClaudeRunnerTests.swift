@@ -41,6 +41,17 @@ struct ClaudeRunnerTests {
         #expect(a.contains("opus"))
     }
 
+    @Test("researchArgs enables ONLY WebSearch+WebFetch + keeps --safe-mode (hooks/config off; SME H2)")
+    func researchArgsWebOnly() {
+        let a = ClaudeRunner.researchArgs(model: "opus", system: "sys")
+        #expect(a.contains("WebSearch") && a.contains("WebFetch"))
+        #expect(a.contains("--allowedTools"))                      // auto-approve → no headless prompt hang
+        #expect(a.contains("--safe-mode"))                         // hooks/CLAUDE.md/skills/MCP off (verified web still works)
+        #expect(!a.contains("Bash") && !a.contains("Write") && !a.contains("Edit"))  // no code/file execution
+        #expect(!a.contains("--dangerously-skip-permissions"))
+        #expect(a.contains("--strict-mcp-config") && a.contains("--no-session-persistence"))
+    }
+
     @Test("parseEnvelope picks the answering model (not the helper) + correct tokens/cost")
     func parse() throws {
         let c = try ClaudeRunner.parseEnvelope(Data(Self.envelope.utf8), requestedModel: "sonnet")

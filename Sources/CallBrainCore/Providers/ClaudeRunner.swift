@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Command-building and envelope-parsing are pure static funcs (unit-tested against a captured real
 /// envelope); only `complete` spawns the subprocess.
-public actor ClaudeRunner: LLMProvider {
+public actor ClaudeRunner: LLMProvider, WebResearchProvider {
     public let executablePath: String
     public let sandboxDir: String
     public nonisolated let id: ProviderID = .claude
@@ -28,6 +28,25 @@ public actor ClaudeRunner: LLMProvider {
                  "--model", model,
                  "--safe-mode",
                  "--tools", "",
+                 "--strict-mcp-config",
+                 "--no-session-persistence",
+                 "--permission-mode", "default",
+                 "--output-format", "json"]
+        if let system, !system.isEmpty { a += ["--system-prompt", system] }
+        return a
+    }
+
+    /// Argv for a web-research call (user-initiated "research online"). Enables ONLY WebSearch + WebFetch
+    /// and auto-allows them so the headless `-p` run doesn't block on a permission prompt. Deliberately
+    /// grants NO Bash/Write/Edit — injected transcript or web content has no way to run code or touch disk.
+    /// Keeps `--safe-mode` (verified live to still allow WebSearch): it disables the user's hooks, CLAUDE.md,
+    /// skills, MCP, and custom agents, so web research can't trigger host-side config/hook execution (SME H2).
+    static func researchArgs(model: String, system: String?) -> [String] {
+        var a = ["-p",
+                 "--model", model,
+                 "--safe-mode",
+                 "--tools", "WebSearch", "WebFetch",
+                 "--allowedTools", "WebSearch", "WebFetch",
                  "--strict-mcp-config",
                  "--no-session-persistence",
                  "--permission-mode", "default",
@@ -119,6 +138,24 @@ public actor ClaudeRunner: LLMProvider {
             scrub: Self.scrubbedEnv,
             timeout: timeout)
 
+        if out.exitCode != 0 {
+            if Self.looksRateLimited(out.stderr) { throw LLMError.rateLimited(resetAt: nil) }
+            throw LLMError.nonZeroExit(code: out.exitCode, stderr: String(out.stderr.prefix(500)))
+        }
+        return try Self.parseEnvelope(Data(out.stdout.utf8), requestedModel: model)
+    }
+
+    /// Run a web-research call (WebSearch+WebFetch enabled). Longer default timeout — a couple of search
+    /// round-trips take time. Same env-scrub (subscription auth) + sandbox cwd as the grounded path.
+    public func completeWithWeb(prompt: String, system: String? = nil,
+                                model: String = "sonnet", timeout: TimeInterval = 240) async throws -> Completion {
+        guard FileManager.default.isExecutableFile(atPath: executablePath) else {
+            throw LLMError.notInstalled(executablePath)
+        }
+        let out = try await Subprocess.run(
+            executable: executablePath,
+            args: Self.researchArgs(model: model, system: system),
+            stdin: prompt, cwd: sandboxDir, scrub: Self.scrubbedEnv, timeout: timeout)
         if out.exitCode != 0 {
             if Self.looksRateLimited(out.stderr) { throw LLMError.rateLimited(resetAt: nil) }
             throw LLMError.nonZeroExit(code: out.exitCode, stderr: String(out.stderr.prefix(500)))

@@ -1,16 +1,65 @@
 import SwiftUI
 
 /// Renders an Ask-AI answer with real block markdown (headings, bullets, bold) and accent-colored
-/// `[S#]` citation chips — so answers read like a polished product, not raw text.
+/// `[S#]` citation chips. Each `[S#]` is a TAP TARGET: clicking it opens the cited call at that exact
+/// moment (founder ask 2026-06-30) — routed via a `callbrain://cite/S#` link to `onTapCite`.
 struct MarkdownAnswerView: View {
     let text: String
+    var citations: [Cite] = []
+    var onTapCite: ((Cite) -> Void)? = nil
+    @State private var sourcesExpanded = false
+
+    struct WebSource: Identifiable, Equatable { let id: Int; let label: String; let url: URL }
 
     var body: some View {
+        // Normalize a citation that the model wrote as a link (`[S1](url)` → `[S1]`) so it's styled as a
+        // call citation, not mistaken for a web source (SME H4); then collapse web URLs.
+        let content = Self.webContent(Self.stripCitationLinks(text))
         VStack(alignment: .leading, spacing: 7) {
-            ForEach(Array(Self.blocks(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(Self.blocks(content.text).enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
+            if !content.sources.isEmpty { webSourcesFooter(content.sources) }
         }
+        .tint(Theme.accent)   // citation + source links render in-brand, not system blue
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == "callbrain", url.host == "cite" else { return .systemAction }  // web links → browser
+            if let c = citations.first(where: { $0.tag == url.lastPathComponent }) { onTapCite?(c) }
+            return .handled
+        })
+    }
+
+    /// Collapsed list of the web sources cited in this answer (founder ask 2026-06-30) — so the prose shows
+    /// clean clickable source names instead of dozens of raw URLs, with the full links one tap away.
+    private func webSourcesFooter(_ sources: [WebSource]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Button { withAnimation(.snappy) { sourcesExpanded.toggle() } } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: sourcesExpanded ? "chevron.down" : "chevron.right").font(.caption2)
+                    Image(systemName: "globe").font(.caption2)
+                    Text("Web sources · \(sources.count)").font(.caption)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            if sourcesExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(sources) { src in
+                        Link(destination: src.url) {
+                            HStack(spacing: 6) {
+                                Text("\(src.id).").font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                                Text(src.label).font(.caption).foregroundStyle(Theme.accent).lineLimit(1)
+                                Image(systemName: "arrow.up.right.square").font(.caption2).foregroundStyle(.tertiary)
+                                Spacer(minLength: 0)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.leading, 6).padding(.top, 1)
+            }
+        }
+        .padding(.top, 5)
     }
 
     enum Block: Equatable {
@@ -39,6 +88,48 @@ struct MarkdownAnswerView: View {
         }
     }
 
+    /// `[S1](https://…)` → `[S1]`: a model occasionally formats a citation as a link, which the Markdown
+    /// parser would render as bare `S1` (brackets eaten) and `webContent` would miscount as a web source.
+    static func stripCitationLinks(_ s: String) -> String {
+        guard let re = try? NSRegularExpression(pattern: #"\[(S\d+)\]\(https?://[^\s)]+\)"#) else { return s }
+        let ns = s as NSString
+        return re.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: ns.length), withTemplate: "[$1]")
+    }
+
+    /// Rewrite the answer so the prose carries clean clickable source NAMES instead of long raw URLs, and
+    /// collect every web link into a numbered, deduped list for the "Web sources" dropdown. A Markdown link
+    /// `[label](url)` is kept (renders as just `label`); a bare `https://…` URL becomes `[host](url)`.
+    static func webContent(_ s: String) -> (text: String, sources: [WebSource]) {
+        let pattern = #"\[[^\]]+\]\((https?://[^\s)]+)\)|(https?://[^\s)\]]+)"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return (s, []) }
+        let ns = s as NSString
+        var out = ""; var cursor = 0
+        var ordered: [String] = []; var seen = Set<String>()
+        func note(_ u: String) { if seen.insert(u).inserted { ordered.append(u) } }
+        for m in re.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            if m.range.location > cursor {
+                out += ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))
+            }
+            if m.range(at: 1).location != NSNotFound {
+                note(ns.substring(with: m.range(at: 1)))
+                out += ns.substring(with: m.range)                 // keep the markdown link (clean label)
+            } else if m.range(at: 2).location != NSNotFound {
+                let u = ns.substring(with: m.range(at: 2))
+                note(u)
+                let host = URL(string: u)?.host?.replacingOccurrences(of: "www.", with: "") ?? "link"
+                out += "[\(host)](\(u))"                            // bare URL → short domain link
+            }
+            cursor = m.range.location + m.range.length
+        }
+        if cursor < ns.length { out += ns.substring(from: cursor) }
+        let sources = ordered.enumerated().compactMap { (i, u) -> WebSource? in
+            guard let url = URL(string: u) else { return nil }
+            let label = url.host?.replacingOccurrences(of: "www.", with: "") ?? u
+            return WebSource(id: i + 1, label: label, url: url)
+        }
+        return (out, sources)
+    }
+
     static func blocks(_ text: String) -> [Block] {
         var out: [Block] = []
         for raw in text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
@@ -56,27 +147,26 @@ struct MarkdownAnswerView: View {
         return out
     }
 
-    /// Inline rendering: **bold**/*italic* via AttributedString markdown, plus accent `[S#]` chips,
-    /// built as a single concatenated `Text`.
+    /// Inline rendering: parse the WHOLE line's **bold**/*italic* markdown FIRST (so a bold span that
+    /// contains a `[S#]` stays bold), then style each `[S#]` run in the accent color and turn it into a
+    /// `callbrain://cite/S#` link (tap → open that call) when a matching citation exists.
     private func inline(_ s: String) -> Text {
-        guard let re = try? NSRegularExpression(pattern: #"\[S\d+\]"#) else { return Text(Self.md(s)) }
+        var attr = Self.md(s)
+        guard let re = try? NSRegularExpression(pattern: #"\[S\d+\]"#) else { return Text(attr) }
         let ns = s as NSString
-        let matches = re.matches(in: s, range: NSRange(location: 0, length: ns.length))
-        guard !matches.isEmpty else { return Text(Self.md(s)) }
-
-        var result = Text("")
-        var cursor = 0
-        for m in matches {
-            if m.range.location > cursor {
-                result = result + Text(Self.md(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))))
+        let tags = Set(re.matches(in: s, range: NSRange(location: 0, length: ns.length))
+            .map { ns.substring(with: $0.range) })
+        for tag in tags {
+            let inner = String(tag.dropFirst().dropLast())           // "S8"
+            let link = citations.contains(where: { $0.tag == inner }) ? URL(string: "callbrain://cite/\(inner)") : nil
+            var start = attr.startIndex
+            while start < attr.endIndex, let r = attr[start...].range(of: tag) {
+                attr[r].foregroundColor = Theme.accent
+                if let link { attr[r].link = link }
+                start = r.upperBound
             }
-            result = result + Text(ns.substring(with: m.range)).foregroundColor(Theme.accent).bold()
-            cursor = m.range.location + m.range.length
         }
-        if cursor < ns.length {
-            result = result + Text(Self.md(ns.substring(from: cursor)))
-        }
-        return result
+        return Text(attr)
     }
 
     static func md(_ s: String) -> AttributedString {

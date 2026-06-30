@@ -20,6 +20,11 @@ final class AppEnvironment {
     let initError: String?
     /// App-wide durable import queue (created at the end of init, once the store exists).
     private(set) var importCoordinator: ImportCoordinator!
+    /// Optional "watch a folder and auto-import" (created after the coordinator).
+    private(set) var autoImport: FolderAutoImport!
+    /// The global Ask-AI conversation, owned here (not by the view) so an in-flight answer keeps running in
+    /// the background and survives navigating away and back (founder bug 2026-06-30).
+    let askChat = ChatModel()
     let dbPath: String
 
     init() {
@@ -58,6 +63,7 @@ final class AppEnvironment {
         self.providerPrimary = savedPrimary
         self.router = ProviderRouter(claude: claude, codex: codexRunner, primary: savedPrimary)
         self.importCoordinator = ImportCoordinator(env: self)
+        self.autoImport = FolderAutoImport(env: self)   // resumes watching a configured folder, if any
     }
 
     static let providerKey = "callbrain.providerPrimary"
@@ -71,7 +77,11 @@ final class AppEnvironment {
     }
 
     var search: SearchEngine { SearchEngine(store: store, embedder: embedder, space: space) }
-    var ask: AskEngine { AskEngine(search: search, llm: router) }
+    /// Ask uses the strongest Claude model — at flat CLI-subscription cost the best model is free, and the
+    /// founder wants Fireflies-grade answers. (Codex ignores the model hint and uses its own default at high
+    /// reasoning.) The router doubles as the web-researcher, so "research online" follows the same Claude⇄
+    /// Codex selector + transparent fallback.
+    var ask: AskEngine { AskEngine(search: search, llm: router, model: "opus", webResearcher: router) }
     var ingest: IngestEngine { IngestEngine(store: store, embedder: embedder, space: space) }
     var importer: AIImporter { AIImporter(llm: router) }
     /// On-device transcription (Phase 3): WhisperKit + FluidAudio behind the Core protocols. `base`

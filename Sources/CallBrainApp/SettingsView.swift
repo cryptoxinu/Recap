@@ -23,6 +23,29 @@ struct SettingsView: View {
                      + "transcript excerpts are sent to the chosen CLI; embeddings, search, and storage stay on your Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Auto-import") {
+                if let folder = env.autoImport.folderPath {
+                    LabeledContent("Watching") {
+                        Text((folder as NSString).abbreviatingWithTildeInPath).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button("Change folder…") { pickWatchFolder() }
+                        Button("Stop watching") { env.autoImport.setFolder(nil) }
+                        Spacer()
+                        if env.autoImport.importedCount > 0 {
+                            Text("\(env.autoImport.importedCount) auto-imported this session").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text("New transcripts & recordings dropped into this folder import automatically. "
+                         + "Point it at your Google-Drive-synced “Meet Recordings” folder so Gemini notes flow in on their own.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button("Watch a folder for new calls…") { pickWatchFolder() }
+                    Text("Pick a folder (e.g. a Google-Drive-synced “Meet Recordings” folder) and CallBrain "
+                         + "imports new transcripts & recordings automatically as they land — no manual step.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Reminders") {
                 Toggle("Daily action-item reminder", isOn: $taskReminders)
                     .onChange(of: taskReminders) { _, on in
@@ -57,6 +80,17 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .onAppear { primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled }
+    }
+
+    private func pickWatchFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Watch"
+        panel.message = "Pick a folder CallBrain should watch for new calls (e.g. your Google-Drive “Meet Recordings” folder)."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        env.autoImport.setFolder(url)
     }
 
     private var cbkType: UTType { UTType(filenameExtension: "cbk") ?? .data }

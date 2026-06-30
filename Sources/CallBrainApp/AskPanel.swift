@@ -36,6 +36,7 @@ struct AskPanel: View {
 
     @State private var query = ""
     @State private var sheet: MeetingRef?
+    @State private var researchMode = false   // globe toggle: also search the open web (global chat only)
 
     static let globalSuggestions = [
         "What are my action items this week?",
@@ -121,18 +122,51 @@ struct AskPanel: View {
     }
 
     private func ask(_ text: String) {
-        let q = text; query = ""
-        Task { await model.ask(q, env) }
+        let q = text.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty, !busy else { return }
+        query = ""
+        model.send(q, env, research: researchMode)   // background-survivable; Stop cancels it
     }
 
+    /// Global chat only: a globe toggle that also researches the open web for this question.
+    private var showsResearchToggle: Bool { model.meetingID == nil }
+
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            TextField("Ask anything across your meetings…", text: $query, axis: .vertical)
-                .textFieldStyle(.plain).lineLimit(1...5)
-                .onSubmit { ask(query) }
-            Button { ask(query) } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
-                .buttonStyle(.plain).foregroundStyle(Theme.accent)
-                .disabled(busy || query.trimmingCharacters(in: .whitespaces).isEmpty)
+        VStack(spacing: 8) {
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField(showsResearchToggle ? "Ask across your calls — or research the web…" : "Ask about this call…",
+                          text: $query, axis: .vertical)
+                    .textFieldStyle(.plain).lineLimit(1...5)
+                    .onSubmit { ask(query) }
+                    .disabled(busy)
+                if busy {
+                    Button { model.stop() } label: { Image(systemName: "stop.circle.fill").font(.title) }
+                        .buttonStyle(.plain).foregroundStyle(.red)
+                        .help("Stop generating")
+                } else {
+                    Button { ask(query) } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
+                        .buttonStyle(.plain).foregroundStyle(Theme.accent)
+                        .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            if showsResearchToggle {
+                HStack(spacing: 8) {
+                    Button { researchMode.toggle() } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: researchMode ? "globe.americas.fill" : "globe")
+                            Text("Research the web")
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(researchMode ? .white : .secondary)
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .background(Capsule().fill(researchMode ? Theme.accent : Theme.cardFill))
+                        .overlay(Capsule().strokeBorder(researchMode ? .clear : Theme.hairline))
+                    }
+                    .buttonStyle(.plain)
+                    .help("When on, CallBrain also searches the open web and clearly separates web findings from your calls.")
+                    Spacer()
+                }
+            }
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
@@ -144,6 +178,7 @@ struct AskPanel: View {
 struct AskMessageView: View {
     let message: AskMessage
     var onTapCite: ((Cite) -> Void)?
+    @State private var sourcesExpanded = false   // call-citation list is collapsed by default
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -162,25 +197,36 @@ struct AskMessageView: View {
                 ReasoningTimeline(steps: message.steps)
             } else if message.role == .assistant {
                 if !message.steps.isEmpty { ReasoningDisclosure(steps: message.steps) }
-                MarkdownAnswerView(text: message.text).textSelection(.enabled)
+                MarkdownAnswerView(text: message.text, citations: message.citations, onTapCite: onTapCite)
+                    .textSelection(.enabled)
             } else {
                 Text(message.text).textSelection(.enabled)
             }
             if !message.citations.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Sources").font(.caption2.bold()).foregroundStyle(.tertiary).padding(.top, 2)
-                    ForEach(message.citations) { c in
-                        Button { onTapCite?(c) } label: {
-                            HStack(spacing: 6) {
-                                Text(c.tag).font(.caption.bold()).foregroundStyle(Theme.accent)
-                                Text(c.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                Spacer(minLength: 4)
-                                Image(systemName: "arrow.up.right.square").font(.caption2).foregroundStyle(.tertiary)
-                            }
-                            .padding(.vertical, 5).padding(.horizontal, 8)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.accent.opacity(0.08)))
+                    Button { withAnimation(.snappy) { sourcesExpanded.toggle() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: sourcesExpanded ? "chevron.down" : "chevron.right").font(.caption2)
+                            Image(systemName: "quote.opening").font(.caption2)
+                            Text("Sources · \(message.citations.count)").font(.caption)
                         }
-                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    if sourcesExpanded {
+                        ForEach(message.citations) { c in
+                            Button { onTapCite?(c) } label: {
+                                HStack(spacing: 6) {
+                                    Text(c.tag).font(.caption.bold()).foregroundStyle(Theme.accent)
+                                    Text(c.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    Image(systemName: "arrow.up.right.square").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                .padding(.vertical, 5).padding(.horizontal, 8)
+                                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.accent.opacity(0.08)))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 .padding(.top, 4)

@@ -54,6 +54,15 @@ struct MenuBarView: View {
     }
 }
 
+/// User-chosen window appearance (sidebar selector). `system` follows macOS; the others pin it.
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+    var id: String { rawValue }
+    var scheme: ColorScheme? { self == .light ? .light : self == .dark ? .dark : nil }
+    var icon: String { self == .system ? "circle.lefthalf.filled" : self == .light ? "sun.max.fill" : "moon.fill" }
+    var label: String { rawValue.capitalized }
+}
+
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home, ask, meetings, tasks, imports, settings
     var id: String { rawValue }
@@ -86,6 +95,13 @@ struct RootView: View {
         rawValue: ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] ?? "home") ?? .home
     @State private var showWelcome = !UserDefaults.standard.bool(forKey: WelcomeView.seenKey)
         && ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] == nil   // skip during screenshot QA
+    @AppStorage("callbrain.appearance") private var appearance = AppearanceMode.system.rawValue
+
+    private var appearanceMode: AppearanceMode {
+        // Screenshot QA: CALLBRAIN_APPEARANCE overrides the stored choice.
+        if let f = ProcessInfo.processInfo.environment["CALLBRAIN_APPEARANCE"], let m = AppearanceMode(rawValue: f) { return m }
+        return AppearanceMode(rawValue: appearance) ?? .system
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -95,6 +111,7 @@ struct RootView: View {
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
             .navigationTitle("CallBrain")
+            .safeAreaInset(edge: .bottom) { appearancePicker }
         } detail: {
             // CALLBRAIN_MEETING=<id> opens straight to a meeting detail (screenshot QA only).
             if let mid = ProcessInfo.processInfo.environment["CALLBRAIN_MEETING"], !mid.isEmpty {
@@ -110,7 +127,25 @@ struct RootView: View {
                 }
             }
         }
+        .preferredColorScheme(appearanceMode.scheme)
         .task { NotificationManager.refresh(openTaskCount: env.openTaskCount()) }
         .sheet(isPresented: $showWelcome) { WelcomeView() }
+    }
+
+    /// Light / dark / system selector, pinned to the bottom of the sidebar.
+    private var appearancePicker: some View {
+        VStack(spacing: 0) {
+            Divider()
+            Picker("Appearance", selection: $appearance) {
+                ForEach(AppearanceMode.allCases) { mode in
+                    Label(mode.label, systemImage: mode.icon).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .help("Window appearance")
+            .padding(.horizontal, 10).padding(.vertical, 8)
+        }
+        .background(.bar)
     }
 }

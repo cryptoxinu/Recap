@@ -7,6 +7,11 @@ struct MeetingsView: View {
     @State private var query = ""
     @State private var dupCount = 0
     @State private var showDupReview = false
+    // Navigation path (seedable for screenshot QA: CALLBRAIN_OPEN_MEETING=<id> opens straight to the workspace).
+    @State private var path: [String] = {
+        let id = ProcessInfo.processInfo.environment["CALLBRAIN_OPEN_MEETING"] ?? ""
+        return id.isEmpty ? [] : [id]
+    }()
 
     private var filtered: [Store.MeetingRow] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -15,7 +20,7 @@ struct MeetingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if meetings.isEmpty {
                     ContentUnavailableView("No meetings yet", systemImage: "calendar",

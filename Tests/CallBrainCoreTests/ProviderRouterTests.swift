@@ -104,6 +104,7 @@ struct CodexRunnerTests {
         #expect(a.contains("--ephemeral"))            // don't persist the RAG prompt
         #expect(a.contains("--ignore-user-config"))   // no config redirect to an API-key provider
         #expect(a.contains("read-only"))              // no writes / no network egress
+        #expect(a.contains("model_reasoning_effort=high"))  // answer-quality parity with Claude/opus
         #expect(a.contains("-m") && a.contains("gpt-5-codex"))
     }
 

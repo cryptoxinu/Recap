@@ -4,7 +4,7 @@ import Foundation
 /// flips in Settings, with **transparent fallback** to the other on a rate-limit / unavailable / timeout
 /// (so the founder "never thinks about quotas"). A genuine provider error (bad request) is NOT retried on
 /// the other — only availability failures fall back. The answering provider is carried on `Completion`.
-public actor ProviderRouter: LLMProvider {
+public actor ProviderRouter: LLMProvider, WebResearchProvider {
     public nonisolated let id: ProviderID = .claude   // nominal; consumers read Completion.provider
     private let claude: any LLMProvider
     private let codex: any LLMProvider
@@ -33,6 +33,18 @@ public actor ProviderRouter: LLMProvider {
     public func completeJSON(prompt: String, system: String?, schema: String, model: String,
                              timeout: TimeInterval) async throws -> String {
         try await route { try await $0.completeJSON(prompt: prompt, system: system, schema: schema, model: model, timeout: timeout) }
+    }
+
+    /// Web research routed to the selected provider (Claude or Codex — both can search the web), with the
+    /// same transparent fallback to the other on an availability failure.
+    public func completeWithWeb(prompt: String, system: String?, model: String,
+                                timeout: TimeInterval) async throws -> Completion {
+        try await route { provider in
+            guard let web = provider as? any WebResearchProvider else {
+                throw LLMError.notInstalled("web research unavailable for \(provider.id)")
+            }
+            return try await web.completeWithWeb(prompt: prompt, system: system, model: model, timeout: timeout)
+        }
     }
 
     /// Try the primary; on an AVAILABILITY failure, fall back to the secondary. Track who answered.
