@@ -1,15 +1,25 @@
 import SwiftUI
 import CallBrainCore
 
+struct Cite: Identifiable, Equatable, Hashable {
+    let tag: String
+    let meetingID: String
+    let chunkID: String
+    let summary: String
+    var id: String { chunkID }
+}
+
 struct AskMessage: Identifiable, Equatable {
     enum Role { case user, assistant }
     let id = UUID()
     let role: Role
     var text: String
-    var citations: [String]
+    var citations: [Cite]
     var pending: Bool = false
     var status: String? = nil
 }
+
+private struct MeetingRef: Identifiable, Equatable { let id: String; let chunkID: String }
 
 /// The Ask-AI chat — reused full-screen (Ask AI tab) and as the persistent panel on Home.
 struct AskPanel: View {
@@ -19,6 +29,7 @@ struct AskPanel: View {
     @State private var query = ""
     @State private var messages: [AskMessage] = []
     @State private var busy = false
+    @State private var sheet: MeetingRef?
 
     static let suggestions = [
         "What are my action items this week?",
@@ -32,6 +43,13 @@ struct AskPanel: View {
             if messages.isEmpty { emptyState } else { transcript }
             inputBar
         }
+        .sheet(item: $sheet) { ref in
+            NavigationStack {
+                MeetingDetailView(meetingID: ref.id, highlightChunkID: ref.chunkID)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { sheet = nil } } }
+            }
+            .frame(minWidth: 720, minHeight: 620)
+        }
     }
 
     private var emptyState: some View {
@@ -39,14 +57,13 @@ struct AskPanel: View {
             Image(systemName: "sparkles")
                 .font(.system(size: compact ? 26 : 38)).foregroundStyle(Theme.accent)
             Text(compact ? "Ask your calls" : "Ask anything across your calls")
-                .font(compact ? .headline : .title2).bold()
-                .multilineTextAlignment(.center)
+                .font(compact ? .headline : .title2).bold().multilineTextAlignment(.center)
             if !compact {
                 Text("Grounded answers with citations — it refuses rather than guess.")
                     .foregroundStyle(.secondary)
             }
             VStack(spacing: 8) {
-                ForEach(Self.suggestions.prefix(compact ? 4 : 4), id: \.self) { s in
+                ForEach(Self.suggestions, id: \.self) { s in
                     Button { ask(s) } label: {
                         Label(s, systemImage: "arrow.up.forward")
                             .font(compact ? .callout : .body)
@@ -66,7 +83,10 @@ struct AskPanel: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(messages) { m in AskMessageView(message: m).id(m.id) }
+                    ForEach(messages) { m in
+                        AskMessageView(message: m, onTapCite: { c in sheet = MeetingRef(id: c.meetingID, chunkID: c.chunkID) })
+                            .id(m.id)
+                    }
                 }
                 .padding(compact ? 14 : 20)
             }
@@ -108,13 +128,16 @@ struct AskPanel: View {
         defer { busy = false }
         do {
             let ans = try await env.ask.ask(q)
-            let cites = ans.citations.map { "[\($0.tag)] \($0.speaker ?? "Unknown") — \($0.text.prefix(90))…" }
+            let cites = ans.citations.map {
+                Cite(tag: $0.tag, meetingID: $0.meetingID, chunkID: $0.chunkID,
+                     summary: "\($0.speaker ?? "Unknown") — \($0.text.prefix(80))…")
+            }
             if let i = messages.firstIndex(where: { $0.id == pid }) {
                 withAnimation(.snappy) {
                     messages[i].text = ans.text
                     messages[i].citations = cites
                     messages[i].pending = false
-                    messages[i].status = ans.status == .answered ? "\(ans.citations.count) sources" : "no sources"
+                    messages[i].status = ans.status == .answered ? "\(cites.count) sources" : "no sources"
                 }
             }
         } catch {
@@ -128,6 +151,7 @@ struct AskPanel: View {
 
 struct AskMessageView: View {
     let message: AskMessage
+    var onTapCite: ((Cite) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -146,9 +170,20 @@ struct AskMessageView: View {
                 Text(message.text).textSelection(.enabled)
             }
             if !message.citations.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(message.citations, id: \.self) { c in
-                        Text(c).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Sources").font(.caption2.bold()).foregroundStyle(.tertiary).padding(.top, 2)
+                    ForEach(message.citations) { c in
+                        Button { onTapCite?(c) } label: {
+                            HStack(spacing: 6) {
+                                Text(c.tag).font(.caption.bold()).foregroundStyle(Theme.accent)
+                                Text(c.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Image(systemName: "arrow.up.right.square").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            .padding(.vertical, 5).padding(.horizontal, 8)
+                            .background(RoundedRectangle(cornerRadius: 7).fill(Theme.accent.opacity(0.08)))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 4)

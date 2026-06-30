@@ -4,8 +4,11 @@ import CallBrainCore
 struct MeetingDetailView: View {
     @Environment(AppEnvironment.self) private var env
     let meetingID: String
+    var highlightChunkID: String? = nil
+
     @State private var meeting: Store.MeetingRow?
     @State private var groups: [TurnGroup] = []
+    @State private var highlightGroupID: Int?
 
     struct TurnGroup: Identifiable {
         let id: Int
@@ -16,20 +19,28 @@ struct MeetingDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                header
-                Divider()
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    ForEach(groups) { turn($0) }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                    Divider()
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(groups) { turn($0).id($0.id) }
+                    }
+                }
+                .padding(28)
+                .frame(maxWidth: 860, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .task {
+                await load()
+                if let h = highlightGroupID {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    withAnimation(.easeInOut) { proxy.scrollTo(h, anchor: .center) }
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 860, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(meeting?.title ?? "Meeting")
-        .task { await load() }
     }
 
     private var header: some View {
@@ -41,8 +52,7 @@ struct MeetingDetailView: View {
                     Label(sourceLabel(m.source), systemImage: "doc.text")
                     Label("\(groups.count) turns", systemImage: "bubble.left.and.bubble.right")
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -59,29 +69,26 @@ struct MeetingDetailView: View {
                     if g.isInferred {
                         Text("inferred").font(.caption2)
                             .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(.secondary.opacity(0.15), in: Capsule())
-                            .foregroundStyle(.secondary)
+                            .background(.secondary.opacity(0.15), in: Capsule()).foregroundStyle(.secondary)
                     }
                 }
                 ForEach(Array(g.lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .lineSpacing(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(line).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .lineSpacing(2).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(g.id == highlightGroupID ? Theme.accent.opacity(0.12) : .clear))
     }
 
     private func avatar(_ name: String) -> some View {
         let initials = name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
         return Text(initials.isEmpty ? "•" : initials.uppercased())
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(color(for: name), in: Circle())
+            .font(.caption.bold()).foregroundStyle(.white)
+            .frame(width: 30, height: 30).background(color(for: name), in: Circle())
     }
 
     private func color(for name: String) -> Color {
@@ -111,7 +118,6 @@ struct MeetingDetailView: View {
 
     private func load() async {
         if let m = try? env.store.meeting(id: meetingID) { meeting = m }
-        // Prefer persisted utterances (turn-by-turn); fall back to chunks for older meetings.
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
         let rows: [(speaker: String, t: Double?, inferred: Bool, text: String)]
         if utts.isEmpty {
@@ -120,7 +126,6 @@ struct MeetingDetailView: View {
         } else {
             rows = utts.map { (speaker: $0.speaker ?? "—", t: $0.tStart, inferred: $0.isInferred, text: $0.text) }
         }
-        // Group consecutive same-speaker turns.
         var result: [TurnGroup] = []
         for r in rows {
             if let last = result.last, last.speaker == r.speaker {
@@ -131,5 +136,13 @@ struct MeetingDetailView: View {
             }
         }
         groups = result
+
+        // Best-effort: find the group matching the cited chunk to scroll/highlight.
+        if let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first {
+            let needle = String(hit.text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !needle.isEmpty {
+                highlightGroupID = result.first(where: { g in g.lines.contains(where: { $0.contains(needle) || needle.contains($0.prefix(30)) }) })?.id
+            }
+        }
     }
 }
