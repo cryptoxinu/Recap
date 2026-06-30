@@ -147,6 +147,21 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "ALTER TABLE import_jobs ADD COLUMN payload_kind TEXT;")
             try db.execute(sql: "ALTER TABLE import_jobs ADD COLUMN payload TEXT;")
         }
+        m.registerMigration("v6_tasks") { db in
+            // Action items surfaced from meetings (Phase 4) → a standing "what do I owe" view.
+            try db.execute(sql: """
+                CREATE TABLE tasks (
+                  id TEXT PRIMARY KEY,
+                  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                  owner TEXT, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+                  source_chunk_id TEXT, start_timestamp REAL,
+                  dedupe_key TEXT NOT NULL, created_at REAL NOT NULL,
+                  UNIQUE(meeting_id, dedupe_key)
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_tasks_status ON tasks(status);")
+            try db.execute(sql: "CREATE INDEX ix_tasks_meeting ON tasks(meeting_id);")
+        }
         return m
     }()
 
@@ -222,11 +237,23 @@ public final class Store: @unchecked Sendable {
         public init(name: String, kind: String, count: Int) { self.name = name; self.kind = kind; self.count = count }
     }
 
+    /// One action item to persist with its meeting (deduped per meeting via `dedupeKey`).
+    public struct TaskInput: Sendable, Equatable {
+        public let id: String; public let owner: String?; public let text: String
+        public let sourceChunkID: String?; public let tStart: Double?; public let dedupeKey: String
+        public init(id: String, owner: String?, text: String, sourceChunkID: String? = nil,
+                    tStart: Double? = nil, dedupeKey: String) {
+            self.id = id; self.owner = owner; self.text = text
+            self.sourceChunkID = sourceChunkID; self.tStart = tStart; self.dedupeKey = dedupeKey
+        }
+    }
+
     /// Persist a meeting, its chunks, AND their embeddings in ONE transaction (Codex audit fix:
     /// ingest must be atomic so a failure can't leave a searchable, partially-embedded meeting).
     /// FTS rows are maintained by triggers.
     public func saveMeeting(_ m: Meeting, chunks: [ChunkInput], embeddings: [EmbeddingInput] = [],
-                            utterances: [UtteranceInput] = [], entities: [EntityInput] = []) throws {
+                            utterances: [UtteranceInput] = [], entities: [EntityInput] = [],
+                            tasks: [TaskInput] = []) throws {
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
@@ -263,7 +290,66 @@ public final class Store: @unchecked Sendable {
                     VALUES (?, ?, ?, ?, ?)
                     """, arguments: [m.id, e.name, e.kind, e.count, e.name.lowercased()])
             }
+            for t in tasks {
+                // INSERT OR IGNORE on the (meeting_id, dedupe_key) UNIQUE: re-ingest doesn't duplicate
+                // a task or clobber its done/open status the user may have already toggled.
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO tasks
+                    (id, meeting_id, owner, text, status, source_chunk_id, start_timestamp, dedupe_key, created_at)
+                    VALUES (?, ?, ?, ?, 'open', ?, ?, ?, strftime('%s','now'))
+                    """, arguments: [t.id, m.id, t.owner, t.text, t.sourceChunkID, t.tStart, t.dedupeKey])
+            }
         }
+    }
+
+    // MARK: - tasks (action items)
+
+    private static func decodeTask(_ r: Row) -> ActionItem {
+        ActionItem(id: r["id"], meetingID: r["meeting_id"], owner: r["owner"], text: r["text"],
+                   status: ActionItem.Status(rawValue: r["status"]) ?? .open,
+                   sourceChunkID: r["source_chunk_id"], tStart: r["start_timestamp"],
+                   createdAt: r["created_at"] ?? 0)
+    }
+
+    /// All tasks (joined with their meeting title/date for display), newest meeting first.
+    public struct TaskRow: Sendable, Equatable, Identifiable {
+        public let item: ActionItem
+        public let meetingTitle: String
+        public let meetingDate: String
+        public var id: String { item.id }
+    }
+
+    public func tasks(status: ActionItem.Status? = nil, limit: Int = 500) throws -> [TaskRow] {
+        try dbQueue.read { db in
+            var sql = """
+                SELECT t.*, m.title AS m_title, m.date AS m_date FROM tasks t
+                JOIN meetings m ON m.id = t.meeting_id
+                """
+            var args: [(any DatabaseValueConvertible)?] = []
+            if let status { sql += " WHERE t.status = ?"; args.append(status.rawValue) }
+            sql += " ORDER BY m.date_epoch DESC, t.created_at DESC LIMIT ?"
+            args.append(limit)
+            return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).map {
+                TaskRow(item: Self.decodeTask($0), meetingTitle: $0["m_title"], meetingDate: $0["m_date"])
+            }
+        }
+    }
+
+    public func tasks(meetingID: String) throws -> [ActionItem] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM tasks WHERE meeting_id = ? ORDER BY created_at",
+                             arguments: [meetingID]).map(Self.decodeTask)
+        }
+    }
+
+    public func setTaskStatus(id: String, _ status: ActionItem.Status) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE tasks SET status = ? WHERE id = ?", arguments: [status.rawValue, id])
+        }
+    }
+
+    public func openTaskCount() throws -> Int {
+        try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks WHERE status='open'") ?? 0 }
     }
 
     // MARK: - entities (native NER)

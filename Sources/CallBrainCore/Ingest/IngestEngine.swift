@@ -172,10 +172,19 @@ public struct IngestEngine: Sendable {
         let entityInputs = EntityExtractor.extract(fullText).map {
             Store.EntityInput(name: $0.name, kind: $0.kind.rawValue, count: $0.count)
         }
-        // Atomic (Codex audit fix): meeting + chunks + embeddings + utterances + entities persist in ONE
-        // transaction, so a failure can't leave a searchable but partially-embedded meeting.
+        // Action items: deterministic lift from Gemini notes (`[Owner]` lines + action/next-steps
+        // sections) — the founder's real data yields tasks with no LLM cost. Transcript LLM-extraction
+        // layers on later. dedupeKey = owner|text so re-ingest never duplicates or clobbers a toggled task.
+        let taskInputs: [Store.TaskInput] = parsed.source == .gmeetGemini
+            ? ActionItemExtractor.fromNotes(parsed.utterances).enumerated().map { i, e in
+                Store.TaskInput(id: "\(meetingID)_t\(i)", owner: e.owner, text: e.text,
+                                dedupeKey: "\(e.owner?.lowercased() ?? "")|\(e.text.lowercased())")
+              }
+            : []
+        // Atomic (Codex audit fix): meeting + chunks + embeddings + utterances + entities + tasks persist
+        // in ONE transaction, so a failure can't leave a searchable but partially-embedded meeting.
         try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs,
-                              utterances: uttInputs, entities: entityInputs)
+                              utterances: uttInputs, entities: entityInputs, tasks: taskInputs)
 
         return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: embInputs.count)
     }

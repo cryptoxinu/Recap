@@ -27,13 +27,14 @@ struct CallBrainApp: App {
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case home, ask, meetings, imports, settings
+    case home, ask, meetings, tasks, imports, settings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .home: "Home"
         case .ask: "Ask AI"
         case .meetings: "Meetings"
+        case .tasks: "Tasks"
         case .imports: "Import"
         case .settings: "Settings"
         }
@@ -43,6 +44,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .home: "house"
         case .ask: "sparkles"
         case .meetings: "calendar.day.timeline.left"
+        case .tasks: "checklist"
         case .imports: "tray.and.arrow.down"
         case .settings: "gearshape"
         }
@@ -71,6 +73,7 @@ struct RootView: View {
                 case .home: HomeView()
                 case .ask: AskView()
                 case .meetings: MeetingsView()
+                case .tasks: TasksView()
                 case .imports: ImportView()
                 case .settings: SettingsView()
                 }
