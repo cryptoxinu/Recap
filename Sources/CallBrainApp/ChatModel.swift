@@ -82,6 +82,7 @@ final class ChatModel {
                     messages[i].citations = cites
                     messages[i].pending = false
                     messages[i].status = ans.status == .answered ? "\(cites.count) sources" : "no sources"
+                    messages[i].provider = ans.provider
                 }
             }
             let stored = ans.citations.map {

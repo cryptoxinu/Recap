@@ -1,0 +1,62 @@
+import Foundation
+
+/// Routes generation across the user's two CLI subscriptions (Phase 5): a `primary` provider the user
+/// flips in Settings, with **transparent fallback** to the other on a rate-limit / unavailable / timeout
+/// (so the founder "never thinks about quotas"). A genuine provider error (bad request) is NOT retried on
+/// the other — only availability failures fall back. The answering provider is carried on `Completion`.
+public actor ProviderRouter: LLMProvider {
+    public nonisolated let id: ProviderID = .claude   // nominal; consumers read Completion.provider
+    private let claude: any LLMProvider
+    private let codex: any LLMProvider
+    private var primary: ProviderID
+
+    public private(set) var lastUsed: ProviderID?
+    public private(set) var lastFellBack = false
+
+    public init(claude: any LLMProvider, codex: any LLMProvider, primary: ProviderID = .claude) {
+        self.claude = claude; self.codex = codex
+        self.primary = (primary == .codex) ? .codex : .claude
+    }
+
+    public func setPrimary(_ p: ProviderID) { primary = (p == .codex) ? .codex : .claude }
+    public func currentPrimary() -> ProviderID { primary }
+
+    private var ordered: [any LLMProvider] { primary == .codex ? [codex, claude] : [claude, codex] }
+
+    public func complete(prompt: String, system: String?, model: String,
+                         timeout: TimeInterval) async throws -> Completion {
+        try await route { try await $0.complete(prompt: prompt, system: system, model: model, timeout: timeout) }
+    }
+
+    public func completeJSON(prompt: String, system: String?, schema: String, model: String,
+                             timeout: TimeInterval) async throws -> String {
+        try await route { try await $0.completeJSON(prompt: prompt, system: system, schema: schema, model: model, timeout: timeout) }
+    }
+
+    /// Try the primary; on an AVAILABILITY failure, fall back to the secondary. Track who answered.
+    private func route<T: Sendable>(_ op: @Sendable (any LLMProvider) async throws -> T) async throws -> T {
+        let providers = ordered
+        var lastError: Error = LLMError.allProvidersFailed("no providers")
+        for (i, provider) in providers.enumerated() {
+            do {
+                let result = try await op(provider)
+                lastUsed = provider.id
+                lastFellBack = i > 0
+                return result
+            } catch let e as LLMError where Self.isAvailabilityFailure(e) {
+                lastError = e
+                continue   // try the next provider
+            }
+            // A non-availability error (e.g. a real bad-request) is the provider's verdict — don't retry.
+        }
+        throw LLMError.allProvidersFailed("\(lastError)")
+    }
+
+    /// Only these justify falling back to the other subscription — a transient/availability problem.
+    static func isAvailabilityFailure(_ e: LLMError) -> Bool {
+        switch e {
+        case .rateLimited, .notInstalled, .launchFailed, .timedOut: return true
+        default: return false
+        }
+    }
+}

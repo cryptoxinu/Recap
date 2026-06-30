@@ -6,10 +6,10 @@ import Foundation
 /// spending any LLM quota when there is no evidence**.
 public struct AskEngine: Sendable {
     public let search: SearchEngine
-    public let llm: ClaudeRunner
+    public let llm: any LLMProvider
     public let model: String
 
-    public init(search: SearchEngine, llm: ClaudeRunner, model: String = "sonnet") {
+    public init(search: SearchEngine, llm: any LLMProvider, model: String = "sonnet") {
         self.search = search; self.llm = llm; self.model = model
     }
 
@@ -152,12 +152,12 @@ public struct AskEngine: Sendable {
         If they do not answer, reply exactly NO_SOURCED_EVIDENCE.
         """
 
-        let completion = try await llm.complete(prompt: prompt, system: Self.systemPrompt, model: model)
+        let completion = try await llm.complete(prompt: prompt, system: Self.systemPrompt, model: model, timeout: 120)
         let text = completion.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if text == "NO_SOURCED_EVIDENCE" || text.isEmpty {
             return Answer(status: .noSources, text: "No sourced evidence found.",
-                          citations: [], provider: .claude, model: completion.model, plan: plan)
+                          citations: [], provider: completion.provider, model: completion.model, plan: plan)
         }
         // Citation validation (anti-hallucination, Codex Phase-1 fix): keep ONLY refs that were actually
         // cited with a VALID [S#] tag. If the model grounded nothing valid in the sources, refuse rather
@@ -167,10 +167,10 @@ public struct AskEngine: Sendable {
         guard !cited.isEmpty else {
             return Answer(status: .noSources,
                           text: "I couldn't ground an answer to that in your calls — try rephrasing or importing more.",
-                          citations: [], provider: .claude, model: completion.model, plan: plan)
+                          citations: [], provider: completion.provider, model: completion.model, plan: plan)
         }
         return Answer(status: .answered, text: text, citations: cited,
-                      provider: .claude, model: completion.model, plan: plan)
+                      provider: completion.provider, model: completion.model, plan: plan)
     }
 
     /// Per-mode framing instruction (Phase 4). Keeps the same grounded-and-cited core; only the shape of

@@ -17,6 +17,7 @@ struct AskMessage: Identifiable, Equatable {
     var citations: [Cite]
     var pending: Bool = false
     var status: String? = nil
+    var provider: ProviderID? = nil             // which subscription answered (Phase 5 badge)
     var steps: [AskEngine.ReasoningStep] = []   // live agentic reasoning timeline (Phase 4.5)
 }
 
@@ -151,6 +152,10 @@ struct AskMessageView: View {
                     .foregroundStyle(message.role == .user ? Color.secondary : Theme.accent)
                 Text(message.role == .user ? "You" : "CallBrain").font(.subheadline).bold()
                 if let s = message.status { Text(s).font(.caption).foregroundStyle(.secondary) }
+                if let p = message.provider {
+                    Text("· \(p == .codex ? "Codex" : "Claude")")
+                        .font(.caption2).foregroundStyle(Theme.accent)
+                }
                 Spacer()
             }
             if message.pending {

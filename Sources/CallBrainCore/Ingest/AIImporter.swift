@@ -10,8 +10,8 @@ import Foundation
 ///     the canonical {title, date, participants, utterances[{speaker, timestamp_seconds, text}]}.
 ///  3. Always ensure a title (generated if the source has none) so every import is named.
 public struct AIImporter: Sendable {
-    public let llm: ClaudeRunner
-    public init(llm: ClaudeRunner) { self.llm = llm }
+    public let llm: any LLMProvider
+    public init(llm: any LLMProvider) { self.llm = llm }
 
     public enum Format: String, Sendable, Equatable {
         case firefliesJSON, firefliesCopy, fathom, geminiNotes, unknown

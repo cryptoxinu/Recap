@@ -38,6 +38,24 @@ public enum LLMError: Error, Sendable, Equatable {
     case providerError(subtype: String, detail: String)   // CLI ran but reported an error envelope
     case rateLimited(resetAt: Double?)
     case decodeFailed(String)
+    case allProvidersFailed(String)
+}
+
+/// A text-generation provider over the user's CLI subscription (claude / codex / a router over both).
+/// The abstraction lets `AskEngine`/`AIImporter` flip providers and fall back transparently (Phase 5).
+public protocol LLMProvider: Sendable {
+    nonisolated var id: ProviderID { get }
+    func complete(prompt: String, system: String?, model: String, timeout: TimeInterval) async throws -> Completion
+    func completeJSON(prompt: String, system: String?, schema: String, model: String, timeout: TimeInterval) async throws -> String
+}
+
+public extension LLMProvider {
+    func complete(prompt: String, system: String? = nil) async throws -> Completion {
+        try await complete(prompt: prompt, system: system, model: "sonnet", timeout: 120)
+    }
+    func completeJSON(prompt: String, system: String?, schema: String) async throws -> String {
+        try await completeJSON(prompt: prompt, system: system, schema: schema, model: "sonnet", timeout: 180)
+    }
 }
 
 // MARK: - Subprocess (Swift-6-clean: non-Sendable Process/Pipe live inside an @unchecked Sendable holder)

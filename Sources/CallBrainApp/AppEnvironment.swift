@@ -10,6 +10,10 @@ final class AppEnvironment {
     let store: Store
     let embedder: OllamaEmbedder
     let llm: ClaudeRunner
+    let codex: CodexRunner
+    let router: ProviderRouter
+    /// Which provider answers first (persisted). Mirrors the router's primary for the UI.
+    var providerPrimary: ProviderID
     let space = "nomic__v1"
     let dataRoot: URL
     /// Non-nil when the primary database could not be opened (surfaced in the UI — never silent).
@@ -43,14 +47,30 @@ final class AppEnvironment {
         }
 
         self.embedder = OllamaEmbedder()
-        self.llm = ClaudeRunner(sandboxDir: sandbox.path)
+        let claude = ClaudeRunner(sandboxDir: sandbox.path)
+        let codexRunner = CodexRunner(sandboxDir: sandbox.path)
+        self.llm = claude
+        self.codex = codexRunner
+        let savedPrimary = ProviderID(rawValue: UserDefaults.standard.string(forKey: Self.providerKey) ?? "") ?? .claude
+        self.providerPrimary = savedPrimary
+        self.router = ProviderRouter(claude: claude, codex: codexRunner, primary: savedPrimary)
         self.importCoordinator = ImportCoordinator(env: self)
     }
 
+    static let providerKey = "callbrain.providerPrimary"
+
+    /// Flip the primary generation provider (Settings) — persisted + applied to the live router.
+    func setProviderPrimary(_ p: ProviderID) {
+        let v: ProviderID = (p == .codex) ? .codex : .claude
+        providerPrimary = v
+        UserDefaults.standard.set(v.rawValue, forKey: Self.providerKey)
+        Task { await router.setPrimary(v) }
+    }
+
     var search: SearchEngine { SearchEngine(store: store, embedder: embedder, space: space) }
-    var ask: AskEngine { AskEngine(search: search, llm: llm) }
+    var ask: AskEngine { AskEngine(search: search, llm: router) }
     var ingest: IngestEngine { IngestEngine(store: store, embedder: embedder, space: space) }
-    var importer: AIImporter { AIImporter(llm: llm) }
+    var importer: AIImporter { AIImporter(llm: router) }
     /// On-device transcription (Phase 3): WhisperKit + FluidAudio behind the Core protocols. `base`
     /// balances speed/accuracy. The adapters are CACHED (created once) so the model loads a single time
     /// and is reused across recordings — their lock-guarded init makes shared reuse safe.

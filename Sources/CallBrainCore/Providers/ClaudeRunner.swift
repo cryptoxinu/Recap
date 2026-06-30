@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Command-building and envelope-parsing are pure static funcs (unit-tested against a captured real
 /// envelope); only `complete` spawns the subprocess.
-public actor ClaudeRunner {
+public actor ClaudeRunner: LLMProvider {
     public let executablePath: String
     public let sandboxDir: String
     public nonisolated let id: ProviderID = .claude
