@@ -5,6 +5,10 @@ import CallBrainCore
 /// API key, then it pulls every new call in the background (transcript + attendees), runs it through the
 /// same ingest/dedupe/title/summary/categorize pipeline, and keeps a watermark so each poll only fetches
 /// what's new. No external infra, no per-call step.
+///
+/// Reliability (audit-hardened): the watermark NEVER advances past a call whose transcript isn't ready yet
+/// or past an un-drained page, a backlog drains across polls via a persisted resume cursor, one bad call
+/// can't block the rest, and a disconnect mid-sync can't resurrect cleared credentials.
 @MainActor
 @Observable
 final class FathomConnect {
@@ -19,10 +23,12 @@ final class FathomConnect {
 
     @ObservationIgnored private var autoSyncTask: Task<Void, Never>?
     private static let seenKey = "callbrain.fathomSeenIDs"
+    private static let cursorKey = "callbrain.fathomResumeCursor"
     private static let seenCap = 6000
-    /// Re-fetch this far back each poll so a call whose transcript wasn't ready last time still gets picked
-    /// up once Fathom finishes processing it.
-    private static let lookbackBuffer: TimeInterval = 2 * 86_400
+    /// Small `created_after` safety margin (clock skew); the watermark logic, not this, handles delays.
+    private static let lookback: TimeInterval = 3600
+    /// Stop blocking the watermark on a call whose transcript still hasn't appeared after this long.
+    private static let transcriptGiveUp: TimeInterval = 3 * 86_400
 
     init(env: AppEnvironment) {
         self.env = env
@@ -40,10 +46,14 @@ final class FathomConnect {
     func connect(apiKey: String) async {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { status = "Paste your Fathom API key first."; return }
-        store.save(FathomCredentials(apiKey: key, lastSync: store.load()?.lastSync))
+        // Require the Keychain write to actually succeed before claiming connected (audit MED).
+        guard store.save(FathomCredentials(apiKey: key, lastSync: store.load()?.lastSync)),
+              store.load()?.apiKey == key else {
+            status = "Couldn't save the key to your Keychain — try again."; return
+        }
         status = "Checking your Fathom key…"
         do {
-            _ = try await client.newMeetings(since: nil, maxPages: 1, pageSize: 1)   // validates the key
+            _ = try await client.fetch(since: nil, startCursor: nil, maxPages: 1, pageSize: 1)   // validates
             connected = true
             status = "Connected — importing your Fathom calls…"
             startAutoSync()
@@ -61,6 +71,7 @@ final class FathomConnect {
         autoSyncTask?.cancel(); autoSyncTask = nil
         store.clear()
         UserDefaults.standard.removeObject(forKey: Self.seenKey)
+        UserDefaults.standard.removeObject(forKey: Self.cursorKey)
         connected = false
         status = "Disconnected."
     }
@@ -77,36 +88,64 @@ final class FathomConnect {
     }
 
     func syncNow() async {
-        guard connected, !syncing else { return }
+        guard connected, !syncing, let creds = store.load() else { return }
         syncing = true; defer { syncing = false }
-        let creds = store.load()
-        let since = creds?.lastSync.map { $0.addingTimeInterval(-Self.lookbackBuffer) }
+        let resume = UserDefaults.standard.string(forKey: Self.cursorKey)
+        // When resuming a backlog the cursor already carries the query; otherwise fetch since the watermark.
+        let since = resume != nil ? nil : creds.lastSync.map { $0.addingTimeInterval(-Self.lookback) }
         do {
-            let meetings = try await client.newMeetings(since: since)
+            let page = try await client.fetch(since: since, startCursor: resume)
+            guard connected, store.load() != nil else { return }       // disconnected mid-fetch (audit HIGH)
+
             var seen = Set(UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? [])
             var seenOrder = UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? []
             var imported = 0
-            var newest = creds?.lastSync
-            // Oldest-first so ordering + the watermark advance sanely.
-            for m in meetings.sorted(by: { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }) {
+            var newestProcessed = creds.lastSync
+            var oldestPending: Date?
+            let giveUp = Date().addingTimeInterval(-Self.transcriptGiveUp)
+            func bump(_ d: Date?) { if let d, d > (newestProcessed ?? .distantPast) { newestProcessed = d } }
+            func wait(_ d: Date?) { if let d, d > giveUp { oldestPending = oldestPending.map { min($0, d) } ?? d } }
+
+            for m in page.meetings.sorted(by: { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }) {
                 guard connected else { break }
-                if let c = m.createdAt, c > (newest ?? .distantPast) { newest = c }
-                guard !m.lines.isEmpty else { continue }          // transcript not ready yet → retry next poll
-                guard !seen.contains(m.id) else { continue }
-                let outcome = try await env.ingest.ingest(m.toParsedTranscript())
-                seen.insert(m.id); seenOrder.append(m.id)
-                if !outcome.deduped {
-                    env.generateTitleIntelligence(for: outcome.meetingID)
-                    env.summarizeInBackground(outcome.meetingID)
-                    env.classifyInBackground(outcome.meetingID)
-                    imported += 1
+                if m.lines.isEmpty { wait(m.createdAt); continue }      // transcript not ready → keep window open
+                if seen.contains(m.id) { bump(m.createdAt); continue }
+                do {
+                    let outcome = try await env.ingest.ingest(m.toParsedTranscript())
+                    guard connected, store.load() != nil else { return }   // disconnected mid-loop (audit HIGH)
+                    seen.insert(m.id); seenOrder.append(m.id)
+                    if !outcome.deduped {
+                        env.generateTitleIntelligence(for: outcome.meetingID)
+                        env.summarizeInBackground(outcome.meetingID)
+                        env.classifyInBackground(outcome.meetingID)
+                        imported += 1
+                    }
+                    bump(m.createdAt)
+                } catch {
+                    wait(m.createdAt)   // one bad call can't abort the rest; stays retryable (audit MED)
                 }
             }
+
+            // Pagination: drained → clear the resume cursor; truncated/429 → keep it for next poll.
+            if page.complete { UserDefaults.standard.removeObject(forKey: Self.cursorKey) }
+            else { UserDefaults.standard.set(page.nextCursor, forKey: Self.cursorKey) }
+
+            // Watermark advances ONLY when the window was fully drained, and never past an unresolved call
+            // (audit CRITICAL ×2). Incomplete pass → keep the old watermark; the resume cursor gets the rest.
+            var watermark = creds.lastSync
+            if page.complete {
+                watermark = newestProcessed ?? creds.lastSync
+                if let pending = oldestPending { watermark = min(watermark ?? .distantPast, pending) }
+            }
+
+            guard connected, let cur = store.load() else { return }    // re-check before persisting (audit HIGH)
             if seenOrder.count > Self.seenCap { seenOrder = Array(seenOrder.suffix(Self.seenCap)) }
             UserDefaults.standard.set(seenOrder, forKey: Self.seenKey)
-            if let creds { store.save(FathomCredentials(apiKey: creds.apiKey, lastSync: newest)) }
+            store.save(FathomCredentials(apiKey: cur.apiKey, lastSync: watermark))
             lastSyncCount += imported
-            status = imported == 0 ? "Up to date." : "Imported \(imported) new call\(imported == 1 ? "" : "s")."
+            status = imported == 0
+                ? (page.complete ? "Up to date." : "Importing more…")
+                : "Imported \(imported) new call\(imported == 1 ? "" : "s")."
         } catch FathomError.unauthorized {
             status = "Fathom API key was rejected — reconnect in Settings."
         } catch {

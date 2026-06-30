@@ -130,27 +130,51 @@ public enum FathomParse {
 
 public enum FathomError: Error, Sendable { case notConnected, http(Int), unauthorized }
 
+/// One pass of pagination. `complete` is true only when the cursor was walked to the END with no
+/// truncation or rate-limit; otherwise `nextCursor` is where to resume so a backlog drains across polls
+/// without re-fetching or skipping pages (audit CRITICAL).
+public struct FathomPage: Sendable {
+    public let meetings: [FathomMeeting]
+    public let nextCursor: String?
+    public let complete: Bool
+}
+
+/// Blocks the X-Api-Key from ever being re-sent to a non-Fathom host via an HTTP redirect (audit MED:
+/// SSRF / credential exfiltration). Same-host redirects are allowed; any other host cancels the redirect.
+final class FathomRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        let ok = request.url?.host.map { $0 == "api.fathom.ai" || $0.hasSuffix(".fathom.ai") } ?? false
+        completionHandler(ok ? request : nil)   // nil → don't follow (so the key is never re-sent off-host)
+    }
+}
+
 /// Polls the Fathom public API (https://api.fathom.ai/external/v1) for new meetings, transcript inline.
-/// Auth is a per-user API key in the `X-Api-Key` header. Cursor-paginates; bounded per sync so one poll
-/// can't blow the 60-req/min rate limit. No egress beyond api.fathom.ai.
+/// Auth is a per-user API key in the `X-Api-Key` header. Cursor-paginates; bounded per pass so one poll
+/// can't blow the 60-req/min rate limit. No egress beyond api.fathom.ai (redirects to other hosts blocked).
 public actor FathomClient {
     private let store: any FathomCredentialStore
     private let session: URLSession
     static let base = "https://api.fathom.ai/external/v1"
 
-    public init(store: any FathomCredentialStore, session: URLSession = .shared) {
-        self.store = store; self.session = session
+    public init(store: any FathomCredentialStore, session: URLSession? = nil) {
+        self.store = store
+        self.session = session ?? URLSession(configuration: .default, delegate: FathomRedirectGuard(), delegateQueue: nil)
     }
 
-    /// Fetch meetings created after `since` (nil = the recent default window), transcript + summary inline.
-    /// Walks the cursor up to `maxPages`. Returns newest-first as Fathom orders them.
-    public func newMeetings(since: Date?, maxPages: Int = 6, pageSize: Int = 25) async throws -> [FathomMeeting] {
+    /// Fetch meetings created after `since` (nil = full history), transcript + summary inline, resuming from
+    /// `startCursor` if a previous pass was truncated. Walks up to `maxPages` per pass. The returned
+    /// `FathomPage.complete`/`nextCursor` tell the caller whether the window was fully drained.
+    public func fetch(since: Date?, startCursor: String? = nil, maxPages: Int = 8, pageSize: Int = 25) async throws -> FathomPage {
         guard let key = store.load()?.apiKey, !key.isEmpty else { throw FathomError.notConnected }
         var out: [FathomMeeting] = []
-        var cursor: String?
+        var cursor = startCursor
         var pages = 0
-        repeat {
-            guard let url = Self.meetingsURL(since: since, cursor: cursor, pageSize: pageSize) else { break }
+        while true {
+            guard let url = Self.meetingsURL(since: since, cursor: cursor, pageSize: pageSize) else {
+                return FathomPage(meetings: out, nextCursor: cursor, complete: false)
+            }
             var req = URLRequest(url: url)
             req.setValue(key, forHTTPHeaderField: "X-Api-Key")
             req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -158,14 +182,15 @@ public actor FathomClient {
             let (data, resp) = try await session.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if code == 401 || code == 403 { throw FathomError.unauthorized }
-            if code == 429 { break }                       // rate-limited → stop this pass, resume next sync
+            if code == 429 { return FathomPage(meetings: out, nextCursor: cursor, complete: false) }  // resume this page next poll
             guard (200..<300).contains(code) else { throw FathomError.http(code) }
             let (meetings, next) = FathomParse.meetings(from: data)
             out += meetings
-            cursor = next
             pages += 1
-        } while cursor != nil && pages < maxPages
-        return out
+            cursor = next
+            if next == nil { return FathomPage(meetings: out, nextCursor: nil, complete: true) }       // drained the window
+            if pages >= maxPages { return FathomPage(meetings: out, nextCursor: next, complete: false) } // resume next poll
+        }
     }
 
     static func meetingsURL(since: Date?, cursor: String?, pageSize: Int) -> URL? {

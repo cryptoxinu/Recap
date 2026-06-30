@@ -94,4 +94,46 @@ struct FathomClientTests {
         #expect(q.contains { $0.name == "cursor" && $0.value == "c1" })
         #expect(q.contains { $0.name == "created_after" })
     }
+
+    @Test("fetch: drains pages → complete; truncation by maxPages → incomplete + resume cursor")
+    func fetchPagination() async throws {
+        // Stateless stub: first page carries next_cursor=c2; the c2 page ends the walk.
+        FathomStubProtocol.handler = { req in
+            let cursor = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "cursor" }?.value
+            let body = cursor == "c2"
+                ? #"{"items":[{"id":"b","transcript":[{"speaker":"X","text":"two"}]}]}"#
+                : #"{"items":[{"id":"a","transcript":[{"speaker":"X","text":"one"}]}],"next_cursor":"c2"}"#
+            return (200, Data(body.utf8))
+        }
+        let cfg = URLSessionConfiguration.ephemeral; cfg.protocolClasses = [FathomStubProtocol.self]
+        let client = FathomClient(store: InMemoryFathomStore(FathomCredentials(apiKey: "k")),
+                                  session: URLSession(configuration: cfg))
+
+        let full = try await client.fetch(since: nil, startCursor: nil, maxPages: 8)
+        #expect(full.complete)
+        #expect(full.nextCursor == nil)
+        #expect(full.meetings.map(\.id) == ["a", "b"])
+
+        // Same data, but only one page allowed → not complete, resumes at c2.
+        let trunc = try await client.fetch(since: nil, startCursor: nil, maxPages: 1)
+        #expect(!trunc.complete)
+        #expect(trunc.nextCursor == "c2")
+        #expect(trunc.meetings.map(\.id) == ["a"])
+    }
+}
+
+/// Dedicated URLProtocol stub for the Fathom networked test (stateless handler → safe under parallel tests).
+final class FathomStubProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, Data))?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let (status, data) = Self.handler?(request) ?? (500, Data())
+        let resp = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
