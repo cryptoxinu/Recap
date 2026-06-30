@@ -17,6 +17,7 @@ struct AskMessage: Identifiable, Equatable {
     var citations: [Cite]
     var pending: Bool = false
     var status: String? = nil
+    var steps: [AskEngine.ReasoningStep] = []   // live agentic reasoning timeline (Phase 4.5)
 }
 
 private struct MeetingRef: Identifiable, Equatable { let id: String; let chunkID: String }
@@ -142,8 +143,9 @@ struct AskMessageView: View {
                 Spacer()
             }
             if message.pending {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Thinking…").foregroundStyle(.secondary) }
+                ReasoningTimeline(steps: message.steps)
             } else if message.role == .assistant {
+                if !message.steps.isEmpty { ReasoningDisclosure(steps: message.steps) }
                 MarkdownAnswerView(text: message.text).textSelection(.enabled)
             } else {
                 Text(message.text).textSelection(.enabled)
@@ -171,5 +173,69 @@ struct AskMessageView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .cbCard()
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// The live reasoning timeline (Phase 4.5) — each real pipeline step, the latest with a spinner.
+struct ReasoningTimeline: View {
+    let steps: [AskEngine.ReasoningStep]
+    var body: some View {
+        if steps.isEmpty {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Thinking…").foregroundStyle(.secondary) }
+        } else {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(Array(steps.enumerated()), id: \.element.id) { idx, step in
+                    HStack(alignment: .top, spacing: 9) {
+                        if idx == steps.count - 1 {
+                            ProgressView().controlSize(.small).frame(width: 16, height: 16)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green.opacity(0.8))
+                                .font(.caption).frame(width: 16, height: 16)
+                        }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(step.title).font(.caption.weight(.medium))
+                            Text(step.detail).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+}
+
+/// After answering, the timeline collapses into a "Thought for N steps" disclosure (Fireflies-style).
+struct ReasoningDisclosure: View {
+    let steps: [AskEngine.ReasoningStep]
+    @State private var expanded = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { withAnimation(.snappy) { expanded.toggle() } } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2)
+                    Image(systemName: "brain").font(.caption2)
+                    Text("Reasoning · \(steps.count) steps").font(.caption)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(steps) { step in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: step.icon).font(.caption2).foregroundStyle(Theme.accent)
+                                .frame(width: 14)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(step.title).font(.caption2.weight(.medium))
+                                Text(step.detail).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 4).padding(.bottom, 2)
+            }
+        }
     }
 }

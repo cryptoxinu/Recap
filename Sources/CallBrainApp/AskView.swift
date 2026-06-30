@@ -16,7 +16,13 @@ struct AskView: View {
             AskPanel(model: chat)
         }
         .navigationTitle("Ask AI")
-        .task { chat.refreshRecents(env) }
+        .task {
+            chat.refreshRecents(env)
+            // Screenshot QA: CALLBRAIN_ASK=<question> auto-runs a query so the reasoning timeline renders.
+            if let q = ProcessInfo.processInfo.environment["CALLBRAIN_ASK"], !q.isEmpty, chat.messages.isEmpty {
+                await chat.ask(q, env)
+            }
+        }
         .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $renameText)
             Button("Save") { if let c = renaming { chat.rename(c.id, to: renameText, env) }; renaming = nil }

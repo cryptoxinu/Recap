@@ -60,10 +60,16 @@ final class ChatModel {
         withAnimation(.snappy) { messages.append(pending) }
         let pid = pending.id
 
+        // Live reasoning timeline: append each real pipeline step to the pending message.
+        let onStep: AskEngine.StepHandler = { @MainActor [weak self] step in
+            guard let self, let i = self.messages.firstIndex(where: { $0.id == pid }) else { return }
+            withAnimation(.snappy) { self.messages[i].steps.append(step) }
+        }
+
         do {
             let ans = meetingID == nil
-                ? try await env.ask.ask(q)
-                : try await env.ask.ask(q, inMeeting: meetingID!)
+                ? try await env.ask.ask(q, onStep: onStep)
+                : try await env.ask.ask(q, inMeeting: meetingID!, onStep: onStep)
             let cites = ans.citations.map {
                 Cite(tag: $0.tag, meetingID: $0.meetingID, chunkID: $0.chunkID,
                      summary: "\($0.speaker ?? "Unknown") — \($0.text.prefix(80))…")

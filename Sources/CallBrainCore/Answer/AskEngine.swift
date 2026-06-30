@@ -31,6 +31,30 @@ public struct AskEngine: Sendable {
         public var plan: QueryPlan? = nil       // the deterministic plan (date window / mode) used
     }
 
+    /// One step in the transparent reasoning timeline (Phase 4.5). Each maps to REAL pipeline work —
+    /// never fabricated theater. Emitted live via the `onStep` handler as the pipeline advances.
+    public struct ReasoningStep: Sendable, Equatable, Identifiable {
+        public let id: Int
+        public let icon: String          // SF Symbol
+        public let title: String
+        public let detail: String
+        public init(id: Int, icon: String, title: String, detail: String) {
+            self.id = id; self.icon = icon; self.title = title; self.detail = detail
+        }
+    }
+    /// Handler is MainActor-isolated so a SwiftUI model can update @Observable state directly.
+    public typealias StepHandler = @MainActor @Sendable (ReasoningStep) async -> Void
+
+    /// A few keywords from the question, for the "Searching for …" step.
+    static func searchTerms(_ q: String) -> String {
+        let stop: Set<String> = ["what","did","does","is","the","a","an","about","of","to","in","on",
+                                 "and","me","my","our","we","you","for","with","how","was","were","are",
+                                 "this","that","they","he","she","said","say","tell"]
+        let words = q.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init)
+            .filter { $0.count > 2 && !stop.contains($0) }
+        return words.prefix(4).joined(separator: ", ")
+    }
+
     static let systemPrompt = """
     You are CallBrain, answering questions strictly from a user's own meeting transcripts.
     RULES (non-negotiable):
@@ -44,8 +68,10 @@ public struct AskEngine: Sendable {
     /// Ask a question. Returns a refusal envelope (no LLM call) when retrieval is empty. `now` is the
     /// clock used for date-gating (injectable for tests). A time-scoped question ("this week") becomes a
     /// HARD candidate filter — evidence can ONLY come from inside the window, never outside it.
-    public func ask(_ query: String, topK: Int = 8, now: Date = Date()) async throws -> Answer {
+    public func ask(_ query: String, topK: Int = 8, now: Date = Date(),
+                    onStep: StepHandler? = nil) async throws -> Answer {
         let plan = QueryPlanner.plan(query, now: now)
+        await onStep?(.init(id: 0, icon: "brain", title: "Understanding your question", detail: understandDetail(plan)))
 
         var candidates: [String]? = nil
         if let dr = plan.dateRange {
@@ -58,23 +84,39 @@ public struct AskEngine: Sendable {
             candidates = ids
         }
 
-        return try await answer(query, plan: plan, candidates: candidates, topK: topK)
+        return try await answer(query, plan: plan, candidates: candidates, topK: topK, onStep: onStep)
     }
 
     /// Ask within a SINGLE meeting (the workspace AskFred). Retrieval is hard-filtered to that call's
     /// chunks, so every citation lands inside the same transcript (timestamp-linked navigation).
-    public func ask(_ query: String, inMeeting meetingID: String, topK: Int = 8) async throws -> Answer {
+    public func ask(_ query: String, inMeeting meetingID: String, topK: Int = 8,
+                    onStep: StepHandler? = nil) async throws -> Answer {
         let plan = QueryPlanner.plan(query)
+        await onStep?(.init(id: 0, icon: "brain", title: "Understanding your question", detail: "Reading this call"))
         let candidates = try search.store.chunkIDs(meetingID: meetingID)
         guard !candidates.isEmpty else {
             return Answer(status: .noSources, text: "This call has no indexed content yet.",
                           citations: [], provider: nil, model: nil, plan: plan)
         }
-        return try await answer(query, plan: plan, candidates: candidates, topK: topK)
+        return try await answer(query, plan: plan, candidates: candidates, topK: topK, onStep: onStep)
+    }
+
+    private func understandDetail(_ plan: QueryPlan) -> String {
+        if let dr = plan.dateRange { return "Scoped to \(dr.label)" }
+        switch plan.mode {
+        case .actionItems: return "Finding action items across your calls"
+        case .person: return "Focusing on what a person said"
+        case .technical: return "Looking for the explanation"
+        default: return "Looking across all your calls"
+        }
     }
 
     /// Shared core: retrieve over the candidate set → cited, validated answer (or grounded refusal).
-    private func answer(_ query: String, plan: QueryPlan, candidates: [String]?, topK: Int) async throws -> Answer {
+    private func answer(_ query: String, plan: QueryPlan, candidates: [String]?, topK: Int,
+                        onStep: StepHandler? = nil) async throws -> Answer {
+        let terms = Self.searchTerms(query)
+        await onStep?(.init(id: 1, icon: "magnifyingglass", title: "Searching your calls",
+                            detail: terms.isEmpty ? "Finding the most relevant moments" : "for \(terms)"))
         let hits = try await search.hybrid(query, candidateChunkIDs: candidates, finalLimit: topK)
         guard !hits.isEmpty else {
             let scope = plan.dateRange.map { " from \($0.label)" } ?? ""
@@ -82,6 +124,12 @@ public struct AskEngine: Sendable {
                           text: "Nothing in your calls\(scope) matches that.",
                           citations: [], provider: nil, model: nil, plan: plan)
         }
+
+        let meetingCount = Set(hits.map(\.meetingID)).count
+        await onStep?(.init(id: 2, icon: "doc.text.magnifyingglass", title: "Reading the relevant moments",
+                            detail: "\(hits.count) passage\(hits.count == 1 ? "" : "s") across \(meetingCount) call\(meetingCount == 1 ? "" : "s")"))
+        await onStep?(.init(id: 3, icon: "sparkles", title: "Writing a grounded answer",
+                            detail: "Citing every claim back to your calls"))
 
         let refs = hits.enumerated().map { i, h in
             EvidenceRef(tag: "S\(i + 1)", chunkID: h.chunkID, meetingID: h.meetingID,
