@@ -47,6 +47,42 @@ public enum DriveAPI {
         return c?.url
     }
 
+    /// Files **shared with** the user (Gemini notes / recordings a meeting HOST shared, which never land in
+    /// the user's own folders), newest first. The query is narrowed at the API to recordings + docs/text so
+    /// the user's whole shared corpus (sheets, slides, PDFs, images, …) is never pulled; `isLikelyMeeting`
+    /// + `fetchPlan` narrow it further client-side (SME HIGH — don't import a random shared Google Doc as a
+    /// fake "meeting").
+    public static func sharedWithMeListURL(pageToken: String?) -> URL? {
+        var c = URLComponents(string: base + "/files")
+        let kinds = "(mimeType contains 'video/' or mimeType contains 'audio/' "
+            + "or mimeType = '\(googleDocMime)' or mimeType = '\(docxMime)' "
+            + "or mimeType = 'text/plain' or mimeType = 'text/markdown')"
+        var items: [URLQueryItem] = [
+            .init(name: "q", value: "sharedWithMe = true and trashed = false and \(kinds)"),
+            .init(name: "fields", value: "nextPageToken, files(id,name,mimeType,modifiedTime)"),
+            .init(name: "pageSize", value: "200"),
+            .init(name: "orderBy", value: "modifiedTime desc"),
+            .init(name: "spaces", value: "drive"),
+            .init(name: "supportsAllDrives", value: "true"),
+            .init(name: "includeItemsFromAllDrives", value: "true"),
+        ]
+        if let pageToken, !pageToken.isEmpty { items.append(.init(name: "pageToken", value: pageToken)) }
+        c?.queryItems = items
+        return c?.url
+    }
+
+    /// Whether a SHARED file looks like a meeting artifact rather than an arbitrary shared document. Any
+    /// recording (video/audio) qualifies; a doc/text only qualifies when its name signals a meeting export
+    /// (Gemini notes, transcript, recording). Conservative on purpose — better to miss an oddly-named notes
+    /// doc than to import someone's shared budget spreadsheet as a call. (Folder-based sync skips this: the
+    /// user explicitly chose that folder.)
+    public static func isLikelyMeeting(_ f: DriveFile) -> Bool {
+        if f.mimeType.hasPrefix("video/") || f.mimeType.hasPrefix("audio/") { return true }
+        let n = f.name.lowercased()
+        return ["gemini", "notes by", "transcript", "meeting notes", "recording", "- notes", "(notes)"]
+            .contains { n.contains($0) }
+    }
+
     /// Find folders by exact name (to locate e.g. "Meet Recordings").
     public static func folderSearchURL(name: String) -> URL? {
         let q = "mimeType = '\(folderMime)' and name = '\(esc(name))' and trashed = false"

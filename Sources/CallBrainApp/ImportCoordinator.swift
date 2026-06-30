@@ -37,16 +37,22 @@ final class ImportCoordinator {
     }
 
     @discardableResult
-    func enqueueFiles(_ urls: [URL]) -> Int {
+    func enqueueFiles(_ urls: [URL]) -> Int { enqueueFilesReturningQueued(urls).count }
+
+    /// Like `enqueueFiles` but returns exactly the URLs that were durably queued, so a caller can record
+    /// only what actually succeeded (Drive sync marks only enqueued files as synced — never a file whose
+    /// job failed to persist, which would silently drop it forever).
+    @discardableResult
+    func enqueueFilesReturningQueued(_ urls: [URL]) -> [URL] {
         let files = Self.importable(urls)
-        var enqueued = 0
+        var queued: [URL] = []
         for url in files {
             let job = ImportJob(id: newID(), sourceName: url.lastPathComponent,
                                 createdAt: now(), payloadKind: .file, payload: url.path)
-            if persist(job) { enqueued += 1 }
+            if persist(job) { queued.append(url) }
         }
-        if enqueued > 0 { startDraining() }
-        return enqueued
+        if !queued.isEmpty { startDraining() }
+        return queued
     }
 
     /// Archive migration (Phase 7): recursively scan a folder for importable transcripts + recordings and
@@ -152,7 +158,10 @@ final class ImportCoordinator {
                 j.state = .done
                 j.message = nil
             }
-            if !outcome.deduped { env.generateTitleIntelligence(for: outcome.meetingID) }   // proper AI title + summary
+            if !outcome.deduped {
+                env.generateTitleIntelligence(for: outcome.meetingID)   // proper AI title + one-liner
+                env.summarizeInBackground(outcome.meetingID)            // queue the full Summary-tab pass
+            }
             _ = persist(j)
         } catch {
             j.state = .failed
@@ -184,7 +193,10 @@ final class ImportCoordinator {
         j.message = outcome.deduped
             ? "Already imported — this recording matches a call in your library."
             : "Transcribed \(out.transcript.utterances.count) turns\(speakerNote)."
-        if !outcome.deduped { env.generateTitleIntelligence(for: outcome.meetingID) }   // proper AI title + summary
+        if !outcome.deduped {
+            env.generateTitleIntelligence(for: outcome.meetingID)   // proper AI title + one-liner
+            env.summarizeInBackground(outcome.meetingID)            // queue the full Summary-tab pass
+        }
     }
 
     /// Live progress for a transcribing job — updates the DISPLAY list in memory (not persisted per tick).

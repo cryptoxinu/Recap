@@ -88,4 +88,45 @@ struct StoreTests {
         #expect(Store.sanitizeFTS("a AND b") == "\"a\" \"and\" \"b\"")
         #expect(Store.sanitizeFTS("   ").isEmpty)
     }
+
+    @Test("setSummaryTasks replaces OPEN summary tasks on regenerate but preserves completed ones")
+    func summaryTasksReconcile() throws {
+        let store = try tempStore()
+        let m = Meeting(id: "m1", title: "Sync", date: "2026-06-30", source: .fathom)
+        try store.saveMeeting(m, chunks: [chunk("c0", "m1", 0, "Z", "x", 0)])
+
+        try store.setSummaryTasks(meetingID: "m1", items: [
+            ActionItemDraft(owner: "Zade", text: "Fix BitRouter format"),
+            ActionItemDraft(owner: "Ghazal", text: "Ship billing page"),
+        ])
+        #expect(try store.tasks(meetingID: "m1").count == 2)
+
+        // User completes one.
+        let done = try #require(try store.tasks(meetingID: "m1").first { $0.text == "Fix BitRouter format" })
+        #expect(try store.setTaskStatus(id: done.id, .done) == true)
+
+        // Regenerate: a reworded item + a brand-new one. The completed task survives; the stale OPEN one is
+        // replaced, not duplicated.
+        try store.setSummaryTasks(meetingID: "m1", items: [
+            ActionItemDraft(owner: "Ghazal", text: "Ship the billing + Stripe page"),
+            ActionItemDraft(owner: "Max", text: "Finalize GPU cost model"),
+        ])
+        let after = try store.tasks(meetingID: "m1")
+        #expect(after.count == 3)                                                  // 1 done + 2 fresh open
+        #expect(after.contains { $0.text == "Fix BitRouter format" && $0.status == .done })
+        #expect(after.contains { $0.text == "Ship the billing + Stripe page" })
+        #expect(after.contains { $0.text == "Finalize GPU cost model" })
+        #expect(!after.contains { $0.text == "Ship billing page" })               // stale open one gone
+    }
+
+    @Test("setTaskStatus reports whether a row actually changed")
+    func taskStatusReportsChange() throws {
+        let store = try tempStore()
+        let m = Meeting(id: "m1", title: "t", date: "2026-06-30", source: .fathom)
+        try store.saveMeeting(m, chunks: [chunk("c0", "m1", 0, "Z", "x", 0)])
+        try store.setSummaryTasks(meetingID: "m1", items: [ActionItemDraft(owner: nil, text: "do it")])
+        let id = try #require(try store.tasks(meetingID: "m1").first?.id)
+        #expect(try store.setTaskStatus(id: id, .done) == true)
+        #expect(try store.setTaskStatus(id: "task_nonexistent", .done) == false)
+    }
 }

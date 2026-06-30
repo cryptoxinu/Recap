@@ -24,6 +24,8 @@ final class AppEnvironment {
     private(set) var autoImport: FolderAutoImport!
     /// Google Drive cloud sync (OAuth) — dormant until the founder configures + connects.
     private(set) var drive: GoogleDriveConnect!
+    /// Battery-aware serial lifecycle for the local summary model (one at a time, unloads when idle).
+    private(set) var summaries: SummaryScheduler!
     /// The global Ask-AI conversation, owned here (not by the view) so an in-flight answer keeps running in
     /// the background and survives navigating away and back (founder bug 2026-06-30).
     let askChat = ChatModel()
@@ -71,6 +73,7 @@ final class AppEnvironment {
         self.importCoordinator = ImportCoordinator(env: self)
         self.autoImport = FolderAutoImport(env: self)   // resumes watching a configured folder, if any
         self.drive = GoogleDriveConnect(env: self)      // dormant unless the founder connected Google Drive
+        self.summaries = SummaryScheduler(env: self)    // battery-aware local-summary lifecycle
     }
 
     static let providerKey = "callbrain.providerPrimary"
@@ -126,6 +129,65 @@ final class AppEnvironment {
             generateTitleIntelligence(for: m.id)
         }
     }
+
+    /// The local default. Qwen2.5-14B via Ollama — confirmed best-in-class for transcript summarization +
+    /// owner-tagged action-item JSON (two independent research passes, 2026-06-30); free, private, out of
+    /// the box, ~10-15s on Apple Silicon. Configurable in Settings; 7B is the low-RAM fallback.
+    var localSummaryModel: String {
+        UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:14b"
+    }
+
+    /// Generate the Summary-tab content for a call.
+    /// - Gemini-notes calls REUSE Google's notes (zero compute) unless `preferCloud` (the user's "Regenerate
+    ///   with AI" button).
+    /// - Otherwise summarize the transcript LOCALLY (Ollama Qwen) by default — free + private; falls back to
+    ///   the CLI subscription if the local model is unavailable. `preferCloud` runs the premium CLI pass.
+    @discardableResult
+    func generateCallSummary(for meetingID: String, preferCloud: Bool = false) async -> Bool {
+        guard let m = try? store.meeting(id: meetingID) else { return false }
+        if m.source == "gmeet_gemini", !preferCloud {
+            try? store.setCallSummary(id: meetingID, summary: nil, source: "gemini")   // tab renders Google's notes
+            titlesRevision &+= 1
+            return true
+        }
+        let utts = (try? store.utterances(meetingID: meetingID)) ?? []
+        let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+
+        // Local-first chain: best local model → smaller local fallback (if 14B isn't pulled) → cloud as a
+        // last resort. `preferCloud` (the Regenerate button) goes straight to the premium CLI pass.
+        let summarizers: [any Summarizer] = preferCloud
+            ? [CLISummarizer(llm: router, model: "opus")]
+            : [OllamaSummarizer(model: localSummaryModel),
+               OllamaSummarizer(model: "qwen2.5:7b"),
+               CLISummarizer(llm: router, model: "sonnet")]
+        var result: CallSummary?
+        for s in summarizers { if let r = await s.summarize(transcript: text, title: m.displayTitle) { result = r; break } }
+        guard let r = result else { return false }
+        try? store.setCallSummary(id: meetingID, summary: r.summary, source: r.source)
+        // Refresh the call's to-dos idempotently (replaces prior OPEN summary tasks, keeps completed ones)
+        // so a Regenerate doesn't accumulate reworded duplicates.
+        let items = r.actionItems
+            .map { ActionItemDraft(owner: $0.owner, text: String($0.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(280))) }
+            .filter { !$0.text.isEmpty }
+        try? store.setSummaryTasks(meetingID: meetingID, items: items)
+        refreshReminders(); titlesRevision &+= 1
+        return true
+    }
+
+    /// Whether an automatic local summary is still warranted (the call exists, isn't Gemini-notes, and has
+    /// no summary yet). Re-checked just before an auto pass runs so a user "Regenerate" that already
+    /// produced one isn't redundantly re-summarized by a stale queued job.
+    func needsAutoSummary(_ meetingID: String) -> Bool {
+        guard let m = try? store.meeting(id: meetingID), m.source != "gmeet_gemini" else { return false }
+        return m.callSummary?.isEmpty ?? true
+    }
+
+    /// Queue an automatic local summary through the battery-aware scheduler (import path).
+    func summarizeInBackground(_ meetingID: String) { summaries.enqueueAuto(meetingID) }
+
+    /// On launch, queue summaries for any calls that don't have one yet — serialized + battery-gated.
+    func backfillSummaries() { summaries.backfillMissing(recentMeetings()) }
 
     struct ReconcileSummary: Sendable { let reworded: Int; let completed: Int; let deduped: Int; let added: Int }
 

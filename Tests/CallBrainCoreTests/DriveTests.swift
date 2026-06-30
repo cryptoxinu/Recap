@@ -111,6 +111,26 @@ struct DriveOAuthTests {
         #expect(plan("application/octet-stream", "call.vtt")?.ext == "vtt")                           // by-name fallback
         #expect(plan("image/png", "shot.png") == nil)                                                 // not importable
     }
+
+    @Test("shared-with-me query is narrowed to recordings + docs, never the whole shared corpus")
+    func sharedQueryNarrowed() throws {
+        let u = try #require(DriveAPI.sharedWithMeListURL(pageToken: nil))
+        let q = try #require(URLComponents(url: u, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "q" }?.value)
+        #expect(q.contains("sharedWithMe = true"))
+        #expect(q.contains("video/") && q.contains("audio/"))
+        #expect(q.contains("application/vnd.google-apps.document"))
+    }
+
+    @Test("isLikelyMeeting keeps recordings + meeting docs, rejects an arbitrary shared doc")
+    func isLikelyMeeting() {
+        func f(_ name: String, _ mime: String) -> DriveAPI.DriveFile { .init(id: "1", name: name, mimeType: mime) }
+        #expect(DriveAPI.isLikelyMeeting(f("Standup recording.mp4", "video/mp4")))                    // any recording
+        #expect(DriveAPI.isLikelyMeeting(f("Q3 planning – Notes by Gemini", DriveAPI.googleDocMime)))  // Gemini notes
+        #expect(DriveAPI.isLikelyMeeting(f("Sales call transcript", "text/plain")))
+        #expect(!DriveAPI.isLikelyMeeting(f("Q3 Budget", DriveAPI.googleDocMime)))                     // random shared doc
+        #expect(!DriveAPI.isLikelyMeeting(f("Roadmap", DriveAPI.docxMime)))
+    }
 }
 
 /// URLSession moves a POST `httpBody` into `httpBodyStream`; read whichever is set.

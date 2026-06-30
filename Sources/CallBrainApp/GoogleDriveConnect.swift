@@ -116,10 +116,19 @@ final class GoogleDriveConnect {
     private(set) var availableFolders: [DriveAPI.DriveFile] = []
     var folderID: String? { didSet { UserDefaults.standard.set(folderID, forKey: Self.folderIDKey) } }
     var folderName: String? { didSet { UserDefaults.standard.set(folderName, forKey: Self.folderNameKey) } }
+    /// Also import files shared WITH you (Gemini notes / recordings a meeting host shared — they never land
+    /// in your own folders). On by default. Founder ask 2026-06-30.
+    var includeShared: Bool {
+        didSet { UserDefaults.standard.set(includeShared, forKey: Self.includeSharedKey) }
+    }
     @ObservationIgnored private var autoSyncTask: Task<Void, Never>?
+    /// Bumped on disconnect so an in-flight `syncNow` aborts promptly after its next await (instead of
+    /// finishing the whole listing/download pass against a now-disconnected account).
+    @ObservationIgnored private var syncGeneration = 0
 
     static let folderIDKey = "callbrain.driveFolderID"
     static let folderNameKey = "callbrain.driveFolderName"
+    static let includeSharedKey = "callbrain.driveIncludeShared"
     static let syncedKey = "callbrain.driveSyncedKeys"
     static let syncedCap = 8000
 
@@ -129,7 +138,9 @@ final class GoogleDriveConnect {
         self.connected = !((store.load()?.refreshToken).map { $0.isEmpty } ?? true)
         self.folderID = UserDefaults.standard.string(forKey: Self.folderIDKey)
         self.folderName = UserDefaults.standard.string(forKey: Self.folderNameKey)
-        if connected, let f = folderID, !f.isEmpty {           // catch-up sync on launch + keep it fresh
+        self.includeShared = UserDefaults.standard.object(forKey: Self.includeSharedKey) as? Bool ?? true
+        // Catch-up sync on launch + keep it fresh — for a folder sync OR a shared-with-me-only setup.
+        if connected, (!((folderID ?? "").isEmpty) || includeShared) {
             Task { [weak self] in await self?.syncNow() }
             startAutoSync()
         }
@@ -222,6 +233,7 @@ final class GoogleDriveConnect {
         // reconnecting is one tap. Also clear the selected folder + per-account dedupe set so reconnecting
         // to a DIFFERENT Google account doesn't reuse a stale folder id or skip that account's files (SME).
         autoSyncTask?.cancel(); autoSyncTask = nil
+        syncGeneration &+= 1                         // invalidate any in-flight syncNow
         let cfg = store.load()
         // Clear tokens THROUGH the actor so it's serialized with any in-flight refresh (no token resurrection).
         Task { await client.disconnect(preservingConfig: cfg) }
@@ -248,19 +260,31 @@ final class GoogleDriveConnect {
     /// Pull new files from the selected Drive folder into the import queue.
     func syncNow() async {
         guard connected, !syncing else { return }
-        // NEVER sync the whole Drive — require a chosen folder (SME HIGH: nil folder lists all of Drive).
-        guard let folderID, !folderID.isEmpty else { status = "Choose a Drive folder to sync first."; return }
+        let hasFolder = !((folderID ?? "").isEmpty)
+        // Sync the chosen folder AND/OR files shared with you. Never the whole Drive (SME HIGH).
+        guard hasFolder || includeShared else { status = "Choose a Drive folder to sync first."; return }
         syncing = true; defer { syncing = false }
+        let gen = syncGeneration
+        // Live only while still connected AND this exact sync wasn't superseded by a disconnect/reconnect.
+        func live() -> Bool { connected && gen == syncGeneration }
         do {
-            let files = try await client.listFiles(folderID: folderID)
+            var files: [DriveAPI.DriveFile] = []
+            if hasFolder, let fid = folderID { files += try await client.listFiles(folderID: fid) }
+            guard live() else { return }                                          // disconnected during listing
+            // Shared files are post-filtered to meeting artifacts so the user's whole shared corpus isn't
+            // imported as fake meetings (audit HIGH).
+            if includeShared { files += try await client.listSharedWithMe().filter(DriveAPI.isLikelyMeeting) }
+            guard live() else { return }
+            var seenIDs = Set<String>(); files = files.filter { seenIDs.insert($0.id).inserted }   // de-dup overlap
             let importable = IngestEngine.readableExtensions.union(ImportCoordinator.mediaExtensions)
             let seen = Set(UserDefaults.standard.stringArray(forKey: Self.syncedKey) ?? [])
             var seenOrder = UserDefaults.standard.stringArray(forKey: Self.syncedKey) ?? []
             let cacheDir = env.dataRoot.appendingPathComponent("drive-import", isDirectory: true)
             try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
 
-            var newURLs: [URL] = []; var failed = 0
+            var pending: [(key: String, url: URL)] = []; var failed = 0
             for f in files {
+                guard live() else { break }   // user disconnected/reconnected mid-sync → stop downloading (audit MED)
                 let key = "\(f.id)@\(f.modifiedTime ?? "")"
                 guard !seen.contains(key), let plan = DriveAPI.fetchPlan(for: f, importable: importable) else { continue }
                 do {
@@ -270,18 +294,22 @@ final class GoogleDriveConnect {
                         .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
                     let dest = cacheDir.appendingPathComponent("\(safeBase)-\(f.id).\(plan.ext)")
                     try await client.downloadToFile(plan.url, dest: dest)
-                    newURLs.append(dest)
-                    seenOrder.append(key)
+                    pending.append((key: key, url: dest))
                 } catch { failed += 1 }   // skip a single bad file; keep going, but count it
             }
-            if !newURLs.isEmpty {
-                lastSyncCount += env.importCoordinator.enqueueFiles(newURLs)
+            var imported = 0
+            if live(), !pending.isEmpty {
+                // Mark synced ONLY the files that actually persisted an import job — a file whose job failed
+                // must NOT be recorded as synced (it would never retry; audit HIGH).
+                let queued = Set(env.importCoordinator.enqueueFilesReturningQueued(pending.map(\.url)))
+                for p in pending where queued.contains(p.url) { seenOrder.append(p.key) }
+                imported = queued.count
+                lastSyncCount += imported
                 if seenOrder.count > Self.syncedCap { seenOrder = Array(seenOrder.suffix(Self.syncedCap)) }
                 UserDefaults.standard.set(seenOrder, forKey: Self.syncedKey)
             }
-            let n = newURLs.count
-            status = n == 0 && failed == 0 ? "Up to date."
-                : "Imported \(n) new file\(n == 1 ? "" : "s")" + (failed > 0 ? " · \(failed) failed" : "") + "."
+            status = imported == 0 && failed == 0 ? "Up to date."
+                : "Imported \(imported) new file\(imported == 1 ? "" : "s")" + (failed > 0 ? " · \(failed) failed" : "") + "."
         } catch {
             status = "Sync failed: \(Self.message(error))"
         }

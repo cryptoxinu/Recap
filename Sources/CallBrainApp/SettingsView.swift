@@ -110,6 +110,11 @@ struct SettingsView: View {
                         }
                     }
                 }
+                Toggle("Also import files shared with me", isOn: Binding(
+                    get: { drive.includeShared }, set: { drive.includeShared = $0 }))
+                Text("Catches Gemini notes & recordings a meeting host shared with you (when you're not the host) "
+                     + "— they don't land in your own folders.")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button(drive.syncing ? "Syncing…" : "Sync now") { Task { await drive.syncNow() } }
                         .disabled(drive.syncing || drive.folderName == nil)

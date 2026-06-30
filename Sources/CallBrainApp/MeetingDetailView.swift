@@ -13,13 +13,21 @@ struct MeetingDetailView: View {
     @State private var noteLines: [String] = []      // populated for Gemini-notes meetings
     @State private var people: [Entity] = []         // native-NER people mentioned
     @State private var highlightGroupID: Int?
+    @State private var tasks: [ActionItem] = []      // action items for this call (Summary tab)
+    @State private var tab: Tab = .summary
+    @State private var didAutoSummarize = false
 
     // Find-in-transcript
     @State private var findActive = false
     @State private var findText = ""
     @State private var matchIndex = 0
 
+    enum Tab: String, CaseIterable { case summary = "Summary", transcript = "Transcript" }
+
     private var isNotes: Bool { meeting?.source == "gmeet_gemini" }
+    /// Gemini calls are AI notes only (no verbatim transcript) → no Transcript tab; the rest get both.
+    private var showsTabs: Bool { !isNotes }
+    private var hasSummary: Bool { !(meeting?.callSummary?.isEmpty ?? true) }
 
     struct TurnGroup: Identifiable {
         let id: Int
@@ -57,10 +65,10 @@ struct MeetingDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         header
+                        if showsTabs { tabPicker }
                         Divider()
-                        if isNotes {
-                            GeminiNotesView(lines: noteLines, title: meeting?.title,
-                                            highlight: findText, citedSnippet: citedNoteSnippet)
+                        if tab == .summary || !showsTabs {
+                            summaryTab
                         } else {
                             LazyVStack(alignment: .leading, spacing: 16) {
                                 ForEach(groups) { turn($0).id($0.id) }
@@ -74,9 +82,11 @@ struct MeetingDetailView: View {
             }
             .task {
                 await load()
+                await autoSummarizeIfNeeded()
                 // Screenshot QA: CALLBRAIN_FIND=<query> opens the Find bar pre-filled.
                 if let f = ProcessInfo.processInfo.environment["CALLBRAIN_FIND"], !f.isEmpty {
                     findActive = true; findText = f
+                    if showsTabs { tab = .transcript }           // mount the transcript so matches scroll
                     if let first = matches.first { scrollTo(first, proxy) }
                 }
                 await scrollToHighlight(proxy)
@@ -84,14 +94,17 @@ struct MeetingDetailView: View {
             .onChange(of: highlightChunkID) { _, _ in
                 Task { recomputeHighlight(); await scrollToHighlight(proxy) }
             }
+            .onChange(of: env.titlesRevision) { _, _ in Task { await reloadMeta() } }
         }
         .navigationTitle(meeting?.displayTitle ?? "Meeting")
         .toolbar {
             ToolbarItem(placement: .automatic) {
-                Button { withAnimation(.snappy) { findActive.toggle() } } label: {
+                Button {
+                    withAnimation(.snappy) { findActive.toggle(); if findActive, showsTabs { tab = .transcript } }
+                } label: {
                     Image(systemName: "magnifyingglass")
                 }
-                .help("Find in transcript")
+                .help(isNotes ? "Find in notes" : "Find in transcript")
             }
         }
     }
@@ -162,6 +175,148 @@ struct MeetingDetailView: View {
                 .padding(.top, 2)
             }
         }
+    }
+
+    private var tabPicker: some View {
+        Picker("View", selection: $tab) {
+            ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 280, alignment: .leading)
+    }
+
+    // MARK: - Summary tab
+
+    private var isSummarizing: Bool { env.summaries.isWorking(on: meetingID) }
+    private var isQueued: Bool { env.summaries.isQueued(meetingID) }
+    private var autoPaused: Bool { env.summaries.autoPausedForPower }
+
+    @ViewBuilder private var summaryTab: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            actionItemsSection
+            summaryBody
+        }
+    }
+
+    @ViewBuilder private var actionItemsSection: some View {
+        if !tasks.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Action items", systemImage: "checklist").font(.headline)
+                ForEach(tasks) { actionRow($0) }
+            }
+        }
+    }
+
+    private func actionRow(_ item: ActionItem) -> some View {
+        Button { toggleTask(item) } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: item.status == .done ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(item.status == .done ? Theme.accent : Color.secondary)
+                    .font(.title3)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.text)
+                        .strikethrough(item.status == .done)
+                        .foregroundStyle(item.status == .done ? .secondary : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let o = item.owner, !o.isEmpty {
+                        Text(o).font(.caption).foregroundStyle(Theme.accent)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var summaryBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Summary", systemImage: "doc.text").font(.headline)
+                Spacer()
+                summaryStatusLabel
+            }
+            if isNotes && !hasSummary {
+                GeminiNotesView(lines: noteLines, title: meeting?.title,
+                                highlight: findText, citedSnippet: citedNoteSnippet)
+            } else if let s = meeting?.callSummary, !s.isEmpty {
+                MarkdownAnswerView(text: s)
+            } else if isSummarizing {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Summarizing locally…").foregroundStyle(.secondary)
+                }
+            } else {
+                Text(autoPaused
+                     ? "Summary paused to save battery — generate it now below."
+                     : "No summary yet — generate one below.")
+                    .foregroundStyle(.secondary)
+            }
+            regenerateBar
+        }
+    }
+
+    @ViewBuilder private var summaryStatusLabel: some View {
+        if isNotes && !hasSummary {
+            Label("Google's notes", systemImage: "sparkles").font(.caption).foregroundStyle(.secondary)
+        } else if meeting?.summarySource == "cloud" {
+            Label("AI · premium", systemImage: "sparkles").font(.caption).foregroundStyle(.secondary)
+        } else if hasSummary {
+            Label("On-device model", systemImage: "cpu").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var regenerateBar: some View {
+        HStack(spacing: 12) {
+            if isSummarizing || isQueued {
+                ProgressView().controlSize(.small)
+                Text(isSummarizing ? "Summarizing…" : "Queued…").font(.caption).foregroundStyle(.secondary)
+            } else {
+                // Local pass only for non-Gemini calls — on a Gemini call "local" just reuses Google's notes
+                // and would discard an AI summary, so Gemini gets the AI button alone.
+                if !isNotes {
+                    Button { generate(cloud: false) } label: {
+                        Label(hasSummary ? "Regenerate" : "Generate summary", systemImage: "arrow.clockwise")
+                    }
+                }
+                Button { generate(cloud: true) } label: {
+                    Label(isNotes ? "Summarize with AI" : "Regenerate with AI", systemImage: "sparkles")
+                }
+                .help("Use your Claude / Codex subscription for a premium-quality pass")
+            }
+        }
+        .font(.callout)
+        .padding(.top, 2)
+    }
+
+    private func generate(cloud: Bool) { env.summaries.requestNow(meetingID, cloud: cloud) }
+
+    private func toggleTask(_ item: ActionItem) {
+        let next: ActionItem.Status = item.status == .done ? .open : .done
+        // Only reflect the toggle in the UI if the row actually changed; otherwise reload so the checklist
+        // never lies about a task that was deleted/reconciled away.
+        if (try? env.store.setTaskStatus(id: item.id, next)) == true {
+            if let i = tasks.firstIndex(where: { $0.id == item.id }) { tasks[i].status = next }
+            env.refreshReminders()
+        } else {
+            Task { await reloadMeta() }
+        }
+    }
+
+    /// Auto-generate a local summary the first time a non-Gemini call is opened without one (the import
+    /// pass usually beat us here; this covers calls imported before the feature). Battery-gated by the
+    /// scheduler. Gemini calls reuse Google's notes — no generation.
+    private func autoSummarizeIfNeeded() async {
+        guard !didAutoSummarize, !isNotes, !hasSummary else { return }
+        didAutoSummarize = true
+        env.summaries.enqueueAuto(meetingID)
+    }
+
+    /// Refresh just the meeting row + tasks (after a summary/regenerate lands) without rebuilding the
+    /// transcript groups.
+    private func reloadMeta() async {
+        if let m = try? env.store.meeting(id: meetingID) { meeting = m }
+        tasks = (try? env.store.tasks(meetingID: meetingID)) ?? []
     }
 
     private func turn(_ g: TurnGroup) -> some View {
@@ -253,6 +408,7 @@ struct MeetingDetailView: View {
 
     private func load() async {
         if let m = try? env.store.meeting(id: meetingID) { meeting = m }
+        tasks = (try? env.store.tasks(meetingID: meetingID)) ?? []
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
         if meeting?.source == "gmeet_gemini" {
             noteLines = utts.map(\.text)

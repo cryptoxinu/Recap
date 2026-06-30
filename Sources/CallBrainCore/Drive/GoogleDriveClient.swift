@@ -88,6 +88,20 @@ public actor GoogleDriveClient {
         return out
     }
 
+    /// Files shared with the user (newest first, bounded) — for hosts who shared the Meet notes/recording.
+    public func listSharedWithMe() async throws -> [DriveAPI.DriveFile] {
+        var out: [DriveAPI.DriveFile] = []; var page: String?
+        var pages = 0; var seenTokens = Set<String>()
+        repeat {
+            guard let url = DriveAPI.sharedWithMeListURL(pageToken: page) else { break }
+            let list = try decode(DriveAPI.FileList.self, try await authedGET(url))
+            out += list.files
+            page = list.nextPageToken; pages += 1
+            if let p = page, !seenTokens.insert(p).inserted { break }
+        } while (page != nil) && out.count < 2000 && pages < 12
+        return out
+    }
+
     public func findFolder(named name: String) async throws -> DriveAPI.DriveFile? {
         guard let url = DriveAPI.folderSearchURL(name: name) else { return nil }
         // Stable pick when Drive has duplicate folder names: lowest id (SME: arbitrary .first).

@@ -197,6 +197,12 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN ai_title TEXT;")
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN ai_summary TEXT;")
         }
+        m.registerMigration("v9_call_summary") { db in
+            // Full markdown call summary for the Summary tab (Gemini-notes calls reuse Google's notes
+            // instead — no AI call). `summary_source`: "gemini" | "ai" so we know where it came from.
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN call_summary TEXT;")
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN summary_source TEXT;")
+        }
         return m
     }()
 
@@ -390,9 +396,13 @@ public final class Store: @unchecked Sendable {
         }
     }
 
-    public func setTaskStatus(id: String, _ status: ActionItem.Status) throws {
+    /// Returns true if a row actually changed (false if the task no longer exists) so callers don't show a
+    /// stale optimistic UI for a task that was deleted out from under them.
+    @discardableResult
+    public func setTaskStatus(id: String, _ status: ActionItem.Status) throws -> Bool {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE tasks SET status = ? WHERE id = ?", arguments: [status.rawValue, id])
+            return db.changesCount > 0
         }
     }
 
@@ -417,6 +427,25 @@ public final class Store: @unchecked Sendable {
                 VALUES (?, ?, ?, ?, 'open', ?, strftime('%s','now'))
                 """, arguments: [id, meetingID, owner, text, String(key)])
             return db.changesCount > 0
+        }
+    }
+
+    /// Replace the OPEN action items a summary pass produced for a call (keyed `sum:`), preserving any the
+    /// user already completed. Lets "Regenerate" refresh the to-dos idempotently instead of piling up
+    /// reworded duplicates every time (audit HIGH).
+    public func setSummaryTasks(meetingID: String, items: [ActionItemDraft]) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM tasks WHERE meeting_id = ? AND status = 'open' AND dedupe_key LIKE 'sum:%'",
+                           arguments: [meetingID])
+            for it in items {
+                let text = it.text.trimmingCharacters(in: .whitespaces)
+                guard !text.isEmpty else { continue }
+                let key = "sum:\(it.owner?.lowercased() ?? "")|\(text.lowercased())"
+                try db.execute(sql: """
+                    INSERT OR IGNORE INTO tasks (id, meeting_id, owner, text, status, dedupe_key, created_at)
+                    VALUES (?, ?, ?, ?, 'open', ?, strftime('%s','now'))
+                    """, arguments: ["task_" + UUID().uuidString, meetingID, it.owner, text, String(key)])
+            }
         }
     }
 
@@ -611,18 +640,23 @@ public final class Store: @unchecked Sendable {
         public let source: String
         public var aiTitle: String? = nil
         public var aiSummary: String? = nil
+        public var callSummary: String? = nil      // full markdown summary (Summary tab)
+        public var summarySource: String? = nil    // "local" | "cloud" | "gemini"
         /// The proper AI title if we have one, else the original (filename-derived) title.
         public var displayTitle: String { (aiTitle?.isEmpty == false) ? aiTitle! : title }
         static func from(_ r: Row) -> MeetingRow {
             MeetingRow(id: r["id"], title: r["title"], date: r["date"], source: r["source"],
-                       aiTitle: r["ai_title"], aiSummary: r["ai_summary"])
+                       aiTitle: r["ai_title"], aiSummary: r["ai_summary"],
+                       callSummary: r["call_summary"], summarySource: r["summary_source"])
         }
     }
+
+    static let meetingCols = "id, title, date, source, ai_title, ai_summary, call_summary, summary_source"
 
     public func recentMeetings(limit: Int = 200) throws -> [MeetingRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, title, date, source, ai_title, ai_summary FROM meetings
+                SELECT \(Self.meetingCols) FROM meetings
                 ORDER BY date_epoch DESC, created_at DESC LIMIT ?
                 """, arguments: [limit]).map(MeetingRow.from)
         }
@@ -633,6 +667,14 @@ public final class Store: @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE meetings SET ai_title = ?, ai_summary = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = ?",
                            arguments: [aiTitle, aiSummary, id])
+        }
+    }
+
+    /// Persist the full call summary + where it came from (Summary tab).
+    public func setCallSummary(id: String, summary: String?, source: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE meetings SET call_summary = ?, summary_source = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = ?",
+                           arguments: [summary, source, id])
         }
     }
 
@@ -682,7 +724,7 @@ public final class Store: @unchecked Sendable {
 
     public func meeting(id: String) throws -> MeetingRow? {
         try dbQueue.read { db in
-            try Row.fetchOne(db, sql: "SELECT id, title, date, source, ai_title, ai_summary FROM meetings WHERE id = ?", arguments: [id])
+            try Row.fetchOne(db, sql: "SELECT \(Self.meetingCols) FROM meetings WHERE id = ?", arguments: [id])
                 .map(MeetingRow.from)
         }
     }
