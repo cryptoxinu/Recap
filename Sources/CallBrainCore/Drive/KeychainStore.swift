@@ -38,7 +38,9 @@ public final class KeychainDriveCredentialStore: DriveCredentialStore, @unchecke
         if status == errSecItemNotFound {
             var add = baseQuery
             add.merge(attrs) { _, new in new }
-            SecItemAdd(add as CFDictionary, nil)
+            if SecItemAdd(add as CFDictionary, nil) == errSecDuplicateItem {
+                _ = SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary)   // lost an add race → update
+            }
         }
     }
 

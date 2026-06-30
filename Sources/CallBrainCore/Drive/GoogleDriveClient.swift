@@ -29,6 +29,9 @@ public actor GoogleDriveClient {
     private let store: any DriveCredentialStore
     private let session: URLSession
     private let now: @Sendable () -> Date
+    /// Bumped on connect/disconnect; a refresh that started before a disconnect won't write its new token
+    /// back (which would "resurrect" a disconnected account — SME MED actor/main race).
+    private var epoch = 0
 
     public init(store: any DriveCredentialStore, session: URLSession = .shared,
                 now: @escaping @Sendable () -> Date = { Date() }) {
@@ -36,7 +39,14 @@ public actor GoogleDriveClient {
     }
 
     public func isConnected() -> Bool { !(store.load()?.refreshToken ?? "").isEmpty }
-    public func disconnect() { store.clear() }
+
+    /// Clear tokens (serialized on the actor with any in-flight refresh), optionally re-saving the OAuth
+    /// client config so reconnecting is one tap.
+    public func disconnect(preservingConfig cfg: DriveCredentials? = nil) {
+        epoch += 1
+        store.clear()
+        if let cfg { store.save(DriveCredentials(clientID: cfg.clientID, clientSecret: cfg.clientSecret, refreshToken: "")) }
+    }
 
     /// Finish the OAuth handshake: exchange the auth code for tokens and persist the refresh token.
     public func connect(code: String, codeVerifier: String, redirectURI: String,
@@ -48,9 +58,14 @@ public actor GoogleDriveClient {
         guard let rt = tr.refresh_token, !rt.isEmpty else {
             throw DriveError.oauth("Google didn't return a refresh token — revoke the app's access and reconnect.")
         }
+        epoch += 1
         store.save(DriveCredentials(clientID: clientID, clientSecret: clientSecret, refreshToken: rt,
                                     accessToken: tr.access_token,
                                     expiry: now().addingTimeInterval(TimeInterval(tr.expires_in ?? 3600))))
+        // Surface a Keychain write that didn't stick, instead of reporting "Connected" falsely (SME MED).
+        guard store.load()?.refreshToken == rt else {
+            throw DriveError.badResponse("couldn't save Google credentials to the Keychain")
+        }
     }
 
     /// All non-trashed files under a folder (paginated, bounded). Guards against a malformed response that
@@ -86,15 +101,21 @@ public actor GoogleDriveClient {
     /// arbitrary URL (SME HIGH: token exfiltration). Refreshes + retries once on 401.
     public func downloadToFile(_ url: URL, dest: URL) async throws {
         try assertGoogle(url)
+        let fm = FileManager.default
         var token = try await validAccessToken()
         var (tmp, resp) = try await session.download(for: authedRequest(url, token: token))
         if (resp as? HTTPURLResponse)?.statusCode == 401 {
+            try? fm.removeItem(at: tmp)                              // don't leak the unauthorized partial
             token = try await validAccessToken(forceRefresh: true)
             (tmp, resp) = try await session.download(for: authedRequest(url, token: token))
         }
         try Self.check(resp, Data())
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.moveItem(at: tmp, to: dest)
+        // Replace the destination atomically — never delete the previous file before the new one is in place.
+        if fm.fileExists(atPath: dest.path) {
+            _ = try fm.replaceItemAt(dest, withItemAt: tmp)
+        } else {
+            try fm.moveItem(at: tmp, to: dest)
+        }
     }
 
     private func assertGoogle(_ url: URL) throws {
@@ -116,10 +137,13 @@ public actor GoogleDriveClient {
         guard var creds = store.load() else { throw DriveError.notConnected }
         if !forceRefresh, let tok = creds.accessToken, let exp = creds.expiry,
            exp.timeIntervalSince(now()) > 60 { return tok }
+        let startEpoch = epoch
         let body = GoogleOAuth.tokenRefreshBody(refreshToken: creds.refreshToken,
                                                 clientID: creds.clientID, clientSecret: creds.clientSecret)
         let tr = try GoogleOAuth.parseTokenResponse(try await postForm(GoogleOAuth.tokenEndpoint, body: body))
         guard let token = tr.access_token else { throw DriveError.badResponse("no access token on refresh") }
+        // If a disconnect/reconnect happened while we were on the network, don't write this token back.
+        guard epoch == startEpoch else { throw DriveError.notConnected }
         creds.accessToken = token
         creds.expiry = now().addingTimeInterval(TimeInterval(tr.expires_in ?? 3600))
         if let rt = tr.refresh_token, !rt.isEmpty { creds.refreshToken = rt }

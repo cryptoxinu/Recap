@@ -187,10 +187,19 @@ final class GoogleDriveConnect {
                 status = "Couldn't open your browser to sign in."; server.cancel(); return
             }
             status = "Waiting for Google sign-in in your browser…"
-            // Don't hang forever if the user abandons the browser flow — time out + tear down the listener.
+            // Don't hang if the user abandons the browser flow. The wait task is wrapped in a cancellation
+            // handler that tears down the loopback (→ resumes waitForCode), so when the timeout task throws
+            // and the group is cancelled, the wait task actually completes and the group can drain (SME HIGH).
             let (code, gotState) = try await withThrowingTaskGroup(of: (code: String, state: String).self) { group in
-                group.addTask { try await server.waitForCode() }
-                group.addTask { try await Task.sleep(for: .seconds(300)); throw DriveError.oauth("timed out waiting for Google sign-in") }
+                group.addTask {
+                    try await withTaskCancellationHandler { try await server.waitForCode() }
+                    onCancel: { server.cancel() }
+                }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(300))
+                    server.cancel()                                 // resume the wait task before throwing
+                    throw DriveError.oauth("timed out waiting for Google sign-in")
+                }
                 defer { group.cancelAll() }
                 guard let first = try await group.next() else { throw DriveError.oauth("sign-in cancelled") }
                 return first
@@ -214,8 +223,8 @@ final class GoogleDriveConnect {
         // to a DIFFERENT Google account doesn't reuse a stale folder id or skip that account's files (SME).
         autoSyncTask?.cancel(); autoSyncTask = nil
         let cfg = store.load()
-        store.clear()
-        if let cfg { store.save(DriveCredentials(clientID: cfg.clientID, clientSecret: cfg.clientSecret, refreshToken: "")) }
+        // Clear tokens THROUGH the actor so it's serialized with any in-flight refresh (no token resurrection).
+        Task { await client.disconnect(preservingConfig: cfg) }
         folderID = nil; folderName = nil; availableFolders = []
         UserDefaults.standard.removeObject(forKey: Self.syncedKey)
         connected = false
