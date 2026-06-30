@@ -168,11 +168,67 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    // MARK: - vector lane (embeddings as BLOBs; V1 brute-force cosine, §0 D5/D6)
+
+    public func saveEmbedding(chunkID: String, space: String, dim: Int, modelID: String,
+                              vector: [Float], contentHash: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO embeddings (chunk_id, space, dim, model_id, vector, content_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, arguments: [chunkID, space, dim, modelID, VectorMath.encode(vector), contentHash])
+        }
+    }
+
+    /// All stored vectors for an embedding space, optionally restricted to a candidate `chunkIDs` set
+    /// (the D6 selectivity-routed path: pre-filter in SQL, then exact brute-force over the subset).
+    public func vectors(space: String, chunkIDs: [String]? = nil) throws -> [(id: String, vector: [Float])] {
+        try dbQueue.read { db in
+            let rows: [Row]
+            if let ids = chunkIDs, !ids.isEmpty {
+                let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+                rows = try Row.fetchAll(db, sql:
+                    "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ? AND chunk_id IN (\(placeholders))",
+                    arguments: StatementArguments([space] + ids))
+            } else {
+                rows = try Row.fetchAll(db, sql:
+                    "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ?", arguments: [space])
+            }
+            return rows.compactMap { r in
+                let dim: Int = r["dim"]
+                let blob: Data = r["vector"]
+                guard let v = VectorMath.decode(blob, dim: dim) else { return nil }
+                return (id: r["chunk_id"], vector: v)
+            }
+        }
+    }
+
+    public func embeddingCount(space: String) throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM embeddings WHERE space = ?", arguments: [space]) ?? 0
+        }
+    }
+
     public func meetingCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }
     public func chunkCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM transcript_chunks") ?? 0 }
+    }
+
+    /// Hydrate chunks by id (e.g. vector-only hits that didn't come through the FTS lane). bm25 = 0.
+    public func chunks(ids: [String]) throws -> [ChunkHit] {
+        guard !ids.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+            let rows = try Row.fetchAll(db, sql:
+                "SELECT chunk_id, meeting_id, speaker, text FROM transcript_chunks WHERE chunk_id IN (\(placeholders))",
+                arguments: StatementArguments(ids))
+            return rows.map { r in
+                ChunkHit(chunkID: r["chunk_id"], meetingID: r["meeting_id"],
+                         speaker: r["speaker"], text: r["text"], bm25: 0)
+            }
+        }
     }
 
     // MARK: - helpers
