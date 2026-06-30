@@ -16,6 +16,7 @@ struct ImportView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                if let err = coordinator.lastError { errorBanner(err) }
                 dropZone
                 pasteSection
                 queueSection
@@ -44,6 +45,19 @@ struct ImportView: View {
                  + "Unknown layouts are resolved by AI and flagged for a quick review.")
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func errorBanner(_ msg: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text(msg).font(.callout).foregroundStyle(.primary)
+            Spacer()
+            Button { coordinator.lastError = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.orange.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.orange.opacity(0.3)))
     }
 
     // MARK: drop zone + file picker
@@ -100,7 +114,10 @@ struct ImportView: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(Theme.cardFill))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
                 HStack {
-                    Button { coordinator.enqueuePaste(raw); raw = "" } label: {
+                    Button {
+                        // Only clear the box once the job is durably queued (MEDIUM-3: never lose paste).
+                        if coordinator.enqueuePaste(raw) { raw = "" }
+                    } label: {
                         Label("Import pasted text", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent).tint(Theme.accent)

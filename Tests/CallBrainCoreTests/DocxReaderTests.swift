@@ -39,6 +39,14 @@ struct DocxReaderTests {
         #expect(DocxReader.extractText(xml) == long)   // no "## " prefix
     }
 
+    @Test("prose containing the literal escaped text \"&lt;w:\" is NOT dropped (audit M2)")
+    func escapedMarkupInProseKept() {
+        // The run text is `if a &lt;w:foo then bail` (escaped) → unescapes to `if a <w:foo then bail`.
+        // The old guard checked the UNESCAPED line for "<w:" and wrongly dropped it.
+        let xml = "<w:p><w:r><w:t>if a &lt;w:foo then bail</w:t></w:r></w:p>"
+        #expect(DocxReader.extractText(xml) == "if a <w:foo then bail")
+    }
+
     /// Round-trip: build a real .docx zip in memory, read it back through the public API.
     @Test("read(): extracts word/document.xml from a real zip container")
     func readRoundTrip() throws {

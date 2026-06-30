@@ -27,12 +27,17 @@ public struct AIImporter: Sendable {
 
     private nonisolated(unsafe) static let copyHeaderRE = try! NSRegularExpression(
         pattern: #"(?m)^\s*.{1,40}?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*$"#)
+    // Real Fathom headers: bare form `Name  M:SS` (timecode at END, text on the next line) OR paren
+    // form `Name (M:SS): text`. Requiring the bare timecode to end the line stops a mid-sentence
+    // timecode in prose ("latency 0:45 being a problem") from being counted as a header (audit M4).
     private nonisolated(unsafe) static let fathomHeaderRE = try! NSRegularExpression(
-        pattern: #"(?m)^\s*.{1,40}?(\s+\d{1,2}:\d{2}(?::\d{2})?|\(\d{1,2}:\d{2}(?::\d{2})?\))\s*:?\s*.*$"#)
+        pattern: #"(?m)^\s*.{1,40}?(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*$|\(\d{1,2}:\d{2}(?::\d{2})?\)\s*:?.*$)"#)
 
-    /// Classify by counting strong format signals (≥3 header matches) so the permissive parsers can't
-    /// grab random prose. Timestamped transcript formats are checked BEFORE Gemini notes (a transcript
-    /// never wins on `##`-header count; notes never win on per-line `Speaker: 0:00` headers).
+    /// Classify by *header density*, not raw counts. The discriminator is the fraction of non-empty
+    /// lines that are timecode/speaker headers: a transcript is MOSTLY headers; Gemini notes (a summary)
+    /// are almost none; prose-with-stray-timecodes is neither → AI-resolve. (Codex/SME audit: a Fathom
+    /// `.docx` with bold colon-less `Travis 0:00` lines was mis-routing to Gemini, and a single-section
+    /// notes paste with incidental timecodes was being shredded as Fathom.)
     public static func detect(_ raw: String) -> Format {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.hasPrefix("{") || t.hasPrefix("[") {
@@ -40,24 +45,24 @@ public struct AIImporter: Sendable {
                 return .firefliesJSON
             }
         }
-        // Gemini's `## ` section structure is a far more specific signal than the permissive Fathom
-        // header regex, so it is checked first — a timestamped transcript never carries `## ` headers,
-        // and Gemini notes never carry `Speaker: 0:00` headers, so the two can't steal each other.
-        if looksLikeGeminiNotes(t) { return .geminiNotes }
-        let full = NSRange(location: 0, length: (raw as NSString).length)
-        if copyHeaderRE.numberOfMatches(in: raw, range: full) >= 3 { return .firefliesCopy }
-        if fathomHeaderRE.numberOfMatches(in: raw, range: full) >= 3 { return .fathom }
+        let full = NSRange(location: 0, length: (t as NSString).length)
+        let copyHits = copyHeaderRE.numberOfMatches(in: t, range: full)
+        let fathomHits = fathomHeaderRE.numberOfMatches(in: t, range: full)
+        let nonEmpty = max(1, t.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count)
+        let headerFraction = Double(copyHits + fathomHits) / Double(nonEmpty)
+        let geminiHeaders = t.components(separatedBy: "\n").filter { $0.hasPrefix("## ") }.count
+
+        // Gemini notes: ≥2 `## ` sections AND headers are a tiny fraction of lines (summary, not transcript).
+        if geminiHeaders >= 2 && headerFraction < 0.25 { return .geminiNotes }
+        // Transcripts: a real one is MOSTLY header lines — the fraction guard stops prose w/ stray timecodes.
+        if copyHits >= 3 && headerFraction >= 0.25 { return .firefliesCopy }
+        if fathomHits >= 3 && headerFraction >= 0.25 { return .fathom }
         return .unknown
     }
 
-    /// Gemini "Notes by Gemini" = a structured SUMMARY: ≥2 `## ` section headers (DocxReader emits them)
-    /// and NO per-line `Speaker: 0:00` timestamp headers. That combination is unique to the notes export.
-    static func looksLikeGeminiNotes(_ t: String) -> Bool {
-        let headers = t.components(separatedBy: "\n").filter { $0.hasPrefix("## ") }.count
-        guard headers >= 2 else { return false }
-        let full = NSRange(location: 0, length: (t as NSString).length)
-        return copyHeaderRE.numberOfMatches(in: t, range: full) == 0
-    }
+    /// Exposed for tests: does this read as Gemini notes?
+    static func looksLikeGeminiNotes(_ t: String) -> Bool { detect(t) == .geminiNotes }
 
     // MARK: - resolve
 

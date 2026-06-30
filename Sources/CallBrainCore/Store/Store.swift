@@ -141,6 +141,12 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "CREATE INDEX ix_entities_name ON meeting_entities(name_lower);")
             try db.execute(sql: "CREATE INDEX ix_entities_meeting ON meeting_entities(meeting_id);")
         }
+        m.registerMigration("v5_import_payloads") { db in
+            // Persist the job's input so a queued/interrupted import survives relaunch (Codex audit HIGH:
+            // the "durable queue" must actually be durable). file → absolute path; paste → the text.
+            try db.execute(sql: "ALTER TABLE import_jobs ADD COLUMN payload_kind TEXT;")
+            try db.execute(sql: "ALTER TABLE import_jobs ADD COLUMN payload TEXT;")
+        }
         return m
     }()
 
@@ -278,12 +284,15 @@ public final class Store: @unchecked Sendable {
     public func meetingsMentioning(_ name: String, limit: Int = 100) throws -> [MeetingRow] {
         let needle = name.trimmingCharacters(in: .whitespaces).lowercased()
         guard !needle.isEmpty else { return [] }
+        // Escape LIKE wildcards so a name containing % or _ isn't treated as a pattern (SME audit L3).
+        let escaped = needle.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
         return try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT DISTINCT m.id, m.title, m.date, m.source FROM meetings m
                 JOIN meeting_entities e ON e.meeting_id = m.id
-                WHERE e.name_lower LIKE ? ORDER BY m.date_epoch DESC LIMIT ?
-                """, arguments: ["%\(needle)%", limit]).map {
+                WHERE e.name_lower LIKE ? ESCAPE '\\' ORDER BY m.date_epoch DESC LIMIT ?
+                """, arguments: ["%\(escaped)%", limit]).map {
                     MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"])
                 }
         }
@@ -292,8 +301,10 @@ public final class Store: @unchecked Sendable {
     /// Top entities across the whole library (for an overview / filter chips).
     public func topEntities(kind: EntityKind? = nil, limit: Int = 30) throws -> [Entity] {
         try dbQueue.read { db in
+            // MAX(name) gives a deterministic display casing across launches (SME audit L2 — a bare
+            // `name` over a GROUP BY name_lower returns an arbitrary member, flip-flopping the chip text).
             var sql = """
-                SELECT name, kind, SUM(count) AS total FROM meeting_entities
+                SELECT MAX(name) AS name, kind, SUM(count) AS total FROM meeting_entities
                 """
             var args: [(any DatabaseValueConvertible)?] = []
             if let kind { sql += " WHERE kind = ?"; args.append(kind.rawValue) }
@@ -504,27 +515,42 @@ public final class Store: @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO import_jobs
-                (id, source_name, state, format, used_ai, meeting_id, title, chunk_count, message, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, source_name, state, format, used_ai, meeting_id, title, chunk_count, message, created_at,
+                 payload_kind, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: [j.id, j.sourceName, j.state.rawValue, j.format, j.usedAI ? 1 : 0,
-                                 j.meetingID, j.title, j.chunkCount, j.message, j.createdAt])
+                                 j.meetingID, j.title, j.chunkCount, j.message, j.createdAt,
+                                 j.payloadKind?.rawValue, j.payload])
         }
+    }
+
+    private static func decodeJob(_ r: Row) -> ImportJob {
+        let used: Int = r["used_ai"] ?? 0
+        return ImportJob(
+            id: r["id"], sourceName: r["source_name"],
+            state: ImportJob.State(rawValue: r["state"]) ?? .failed,
+            format: r["format"], usedAI: used != 0, meetingID: r["meeting_id"],
+            title: r["title"], chunkCount: r["chunk_count"] ?? 0,
+            message: r["message"], createdAt: r["created_at"] ?? 0,
+            payloadKind: (r["payload_kind"] as String?).flatMap(ImportJob.PayloadKind.init),
+            payload: r["payload"])
     }
 
     public func importJobs(limit: Int = 100) throws -> [ImportJob] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, source_name, state, format, used_ai, meeting_id, title, chunk_count, message, created_at
-                FROM import_jobs ORDER BY created_at DESC LIMIT ?
-                """, arguments: [limit]).map { r in
-                    let used: Int = r["used_ai"] ?? 0
-                    return ImportJob(
-                        id: r["id"], sourceName: r["source_name"],
-                        state: ImportJob.State(rawValue: r["state"]) ?? .failed,
-                        format: r["format"], usedAI: used != 0, meetingID: r["meeting_id"],
-                        title: r["title"], chunkCount: r["chunk_count"] ?? 0,
-                        message: r["message"], createdAt: r["created_at"] ?? 0)
-                }
+                SELECT * FROM import_jobs ORDER BY created_at DESC LIMIT ?
+                """, arguments: [limit]).map(Self.decodeJob)
+        }
+    }
+
+    /// ALL still-pending jobs (queued/running) oldest-first — the processing queue (NOT display-limited,
+    /// Codex audit HIGH: a 150-file drop must not strand the oldest 50 behind a 100-row display cap).
+    public func pendingImportJobs() throws -> [ImportJob] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM import_jobs WHERE state IN ('queued','running') ORDER BY created_at ASC
+                """).map(Self.decodeJob)
         }
     }
 
@@ -532,11 +558,12 @@ public final class Store: @unchecked Sendable {
         try dbQueue.write { db in try db.execute(sql: "DELETE FROM import_jobs WHERE id = ?", arguments: [id]) }
     }
 
-    /// Clear finished jobs (done + needsReview + failed); keep queued/running. Returns rows removed.
+    /// Clear FINISHED jobs (done + failed) only; keep queued/running AND `needsReview` (Codex audit LOW:
+    /// clearing must not silently drop the AI-import review queue before the user confirms it).
     @discardableResult
     public func clearFinishedImportJobs() throws -> Int {
         try dbQueue.write { db in
-            try db.execute(sql: "DELETE FROM import_jobs WHERE state IN ('done','needsReview','failed')")
+            try db.execute(sql: "DELETE FROM import_jobs WHERE state IN ('done','failed')")
             return db.changesCount
         }
     }

@@ -65,4 +65,31 @@ struct IngestEngineTests {
         #expect(try store.meetingCount() == 1)             // no duplicate row
         #expect(try store.embeddingCount(space: space) == 3)
     }
+
+    @Test("dedupe keys on date + speakers: same body different day is NOT deduped (audit M1)")
+    func dedupeRespectsDateAndSpeaker() async throws {
+        let store = try freshStore()
+        let engine = IngestEngine(store: store, embedder: StubEmbedder(), space: "stub__v1")
+
+        func notes(date: String) -> ParsedTranscript {
+            ParsedTranscript(title: "Daily standup", date: date, source: .gmeetGemini,
+                speakers: ["Gemini Notes"],
+                utterances: [ParsedUtterance(seq: 0, speakerRaw: "Gemini Notes", tStart: 0, tEnd: 0,
+                                             text: "We discussed Render pricing and GPU costs.", tsConfidence: .none)])
+        }
+        _ = try await engine.ingest(notes(date: "2026-06-29"))
+        let day2 = try await engine.ingest(notes(date: "2026-06-30"))   // identical body, next day
+        #expect(day2.deduped == false)                     // different meeting, not collapsed
+        #expect(try store.meetingCount() == 2)
+
+        // speaker-swap with identical utterance texts must not collide
+        func swap(_ a: String, _ b: String) -> ParsedTranscript {
+            ParsedTranscript(title: "Sync", date: "2026-07-01", source: .fireflies, speakers: [a, b],
+                utterances: [ParsedUtterance(seq: 0, speakerRaw: a, tStart: 0, tEnd: 1, text: "Yes."),
+                             ParsedUtterance(seq: 1, speakerRaw: b, tStart: 1, tEnd: 2, text: "No.")])
+        }
+        _ = try await engine.ingest(swap("Alice", "Bob"))
+        let swapped = try await engine.ingest(swap("Bob", "Alice"))
+        #expect(swapped.deduped == false)                  // speaker order differs → distinct
+    }
 }

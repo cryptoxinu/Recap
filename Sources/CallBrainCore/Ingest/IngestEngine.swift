@@ -5,6 +5,10 @@ public enum IngestError: Error, Sendable, Equatable {
     case embeddingCountMismatch(expected: Int, got: Int)
 }
 
+public enum ReadError: Error, Sendable, Equatable {
+    case tooLarge(mb: Int)      // a file/transcript past the sane import ceiling (OOM / zip-bomb guard)
+}
+
 /// Ties the ingestion pipeline together (docs/ARCHITECTURE.md §6): a parsed transcript →
 /// CTM utterances → speaker-turn chunks → embeddings → persisted + searchable. Phase 1 takes an
 /// explicit source (Fireflies/Fathom); the auto-detecting router + durable state machine land in Phase 2.
@@ -62,10 +66,25 @@ public struct IngestEngine: Sendable {
 
     /// Extensions this engine can read off disk (used by the drop target to accept/reject files).
     public static let readableExtensions: Set<String> = ["docx", "txt", "md", "json", "srt", "vtt"]
+    /// A transcript past this on-disk size is rejected before reading (OOM / accidental-huge-file guard).
+    /// Real meeting transcripts are KBs–low-MBs; 64 MB is already ~weeks of dense talk.
+    public static let maxReadBytes = 64 * 1024 * 1024
 
     static func readText(at url: URL) throws -> String {
         if url.pathExtension.lowercased() == "docx" { return try DocxReader.read(url: url) }
-        return try String(contentsOf: url, encoding: .utf8)
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > maxReadBytes {
+            throw ReadError.tooLarge(mb: size / (1024 * 1024))
+        }
+        // Many real transcript/subtitle exports (SRT/VTT, Windows tools) are NOT UTF-8 — fall back to
+        // the system's best guess, then Windows-1252, then Latin-1 (never fails), so a single curly
+        // apostrophe (0x92) doesn't reject a perfectly valid transcript with a cryptic error (SME H1).
+        if let s = try? String(contentsOf: url, encoding: .utf8) { return s }
+        var used = String.Encoding.utf8
+        if let s = try? String(contentsOf: url, usedEncoding: &used) { return s }
+        let data = try Data(contentsOf: url)
+        return String(data: data, encoding: .windowsCP1252)
+            ?? String(data: data, encoding: .isoLatin1)
+            ?? String(decoding: data, as: UTF8.self)
     }
 
     /// Best-effort title + date from a filename like
@@ -93,8 +112,13 @@ public struct IngestEngine: Sendable {
     /// Persist a parsed transcript end-to-end and return what landed.
     public func ingest(_ parsed: ParsedTranscript) async throws -> Outcome {
         // Idempotency (tier-1): identical content already ingested → return it, skipping the embedding
-        // cost and avoiding a duplicate meeting. Fingerprint = SHA-256 of the ordered utterance texts.
-        let fingerprint = "sha256:" + Self.sha256(parsed.utterances.map(\.text).joined(separator: "\n"))
+        // cost and avoiding a duplicate meeting. Fingerprint = SHA-256 of date + per-utterance
+        // (speaker, text). Including the DATE stops a recurring standup with identical body on a
+        // different day from being wrongly deduped, and the per-utterance SPEAKER stops a speaker-swap
+        // from colliding (SME audit M1). The volatile AI-generated TITLE is deliberately excluded so a
+        // re-paste of the same text still dedupes despite a non-deterministic title.
+        let body = parsed.utterances.map { "\($0.speakerRaw)\u{1}\($0.text)" }.joined(separator: "\n")
+        let fingerprint = "sha256:" + Self.sha256((parsed.date ?? "") + "\u{2}" + body)
         if let existing = try store.existingMeeting(contentHash: fingerprint) {
             return Outcome(meetingID: existing.id, chunkCount: existing.chunks, embedded: 0, deduped: true)
         }

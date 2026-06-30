@@ -29,7 +29,7 @@ struct ImportJobStoreTests {
         #expect(a?.chunkCount == 9)
     }
 
-    @Test("clearFinished removes done/needsReview/failed, keeps queued/running")
+    @Test("clearFinished removes done/failed only; keeps queued/running AND needsReview")
     func clearFinished() throws {
         let store = try freshStore()
         try store.upsertImportJob(ImportJob(id: "q", sourceName: "q", state: .queued, createdAt: 1))
@@ -39,8 +39,8 @@ struct ImportJobStoreTests {
         try store.upsertImportJob(ImportJob(id: "f", sourceName: "f", state: .failed, createdAt: 5))
 
         let removed = try store.clearFinishedImportJobs()
-        #expect(removed == 3)
-        #expect(Set(try store.importJobs().map(\.id)) == ["q", "r"])
+        #expect(removed == 2)                                       // done + failed only
+        #expect(Set(try store.importJobs().map(\.id)) == ["q", "r", "n"])   // needsReview preserved
     }
 
     @Test("delete a single job by id")
@@ -49,5 +49,32 @@ struct ImportJobStoreTests {
         try store.upsertImportJob(ImportJob(id: "x", sourceName: "x", state: .done, createdAt: 1))
         try store.deleteImportJob(id: "x")
         #expect(try store.importJobs().isEmpty)
+    }
+
+    @Test("payload (file path / pasted text) round-trips so a job survives relaunch")
+    func payloadRoundTrip() throws {
+        let store = try freshStore()
+        try store.upsertImportJob(ImportJob(id: "f", sourceName: "a.docx", state: .queued, createdAt: 1,
+                                            payloadKind: .file, payload: "/Users/z/a.docx"))
+        try store.upsertImportJob(ImportJob(id: "p", sourceName: "Pasted text", state: .queued, createdAt: 2,
+                                            payloadKind: .paste, payload: "Travis: hi"))
+        let jobs = try store.importJobs()
+        let f = jobs.first { $0.id == "f" }; let p = jobs.first { $0.id == "p" }
+        #expect(f?.payloadKind == .file); #expect(f?.payload == "/Users/z/a.docx")
+        #expect(p?.payloadKind == .paste); #expect(p?.payload == "Travis: hi")
+    }
+
+    @Test("pendingImportJobs returns ALL queued/running oldest-first (not display-limited)")
+    func pendingUnbounded() throws {
+        let store = try freshStore()
+        for i in 0..<150 {
+            try store.upsertImportJob(ImportJob(id: "j\(i)", sourceName: "f\(i)", state: .queued,
+                                                createdAt: Double(i)))
+        }
+        try store.upsertImportJob(ImportJob(id: "done", sourceName: "d", state: .done, createdAt: 999))
+        let pending = try store.pendingImportJobs()
+        #expect(pending.count == 150)                         // not capped at 100
+        #expect(pending.first?.id == "j0")                    // oldest first
+        #expect(!pending.contains { $0.id == "done" })        // finished excluded
     }
 }

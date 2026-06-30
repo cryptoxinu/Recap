@@ -42,6 +42,34 @@ struct ImportRoutingTests {
         #expect(AIImporter.detect("just some freeform notes about a call, nothing structured here") == .unknown)
     }
 
+    @Test("a Fathom-style transcript with ## bold headers does NOT misroute to Gemini (audit M3)")
+    func fathomDocxNotGemini() {
+        // DocxReader prefixes bold short lines with `## `; a colon-less Fathom header `Travis 0:00`
+        // becomes `## Travis 0:00`. Must still be seen as a transcript, not shredded as notes.
+        let t = """
+        ## Section one
+        ## Travis 0:00
+        On Render the GPU spot pricing dropped sharply this week.
+        ## Max 0:21
+        Validators stake to secure the network.
+        ## Zade 0:38
+        I shipped the importer last night and it works.
+        """
+        #expect(AIImporter.detect(t) != .geminiNotes)        // header-density guard catches it
+    }
+
+    @Test("single-section notes with stray timecodes route to AI-resolve, not shredded as Fathom (M4)")
+    func straySectionTimecodesUnknown() {
+        let t = """
+        ## Quick notes
+        We talked about latency 0:45 being a problem.
+        Cost came up around 1:30 in the call.
+        Spend tracking by 2:00 was the ask.
+        """
+        // Not a real transcript (prose, low header density) → AI-resolve rather than fabricate turns.
+        #expect(AIImporter.detect(t) == .unknown)
+    }
+
     // MARK: filename metadata
 
     @Test("filenameMeta parses the real Gemini export name")
