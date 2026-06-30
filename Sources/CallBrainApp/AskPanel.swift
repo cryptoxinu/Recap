@@ -56,6 +56,12 @@ struct AskPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             if messages.isEmpty { emptyState } else { transcript }
+            if model.saveFailed {
+                Label("Couldn't save this chat — check disk space or relaunch.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, compact ? 14 : 18).padding(.top, 4)
+            }
             inputBar
         }
         .sheet(item: $sheet) { ref in

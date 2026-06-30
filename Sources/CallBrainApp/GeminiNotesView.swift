@@ -7,11 +7,18 @@ import CallBrainCore
 struct GeminiNotesView: View {
     let lines: [String]
     var title: String? = nil
-    var highlight: String = ""           // Find-in-notes: tint matching points
+    var highlight: String = ""           // Find-in-notes: yellow-tint matching points
+    var citedSnippet: String = ""        // a tapped AskFred citation: accent-tint the cited note
 
-    private func matches(_ s: String) -> Bool {
+    private func matchesFind(_ s: String) -> Bool {
         let q = highlight.trimmingCharacters(in: .whitespaces).lowercased()
         return !q.isEmpty && s.lowercased().contains(q)
+    }
+    private func matchesCite(_ s: String) -> Bool {
+        let q = citedSnippet.trimmingCharacters(in: .whitespaces).lowercased()
+        guard q.count >= 6 else { return false }
+        let l = s.lowercased()
+        return l.contains(q) || q.contains(l.prefix(30))
     }
 
     private struct Section: Identifiable { let id: Int; let title: String?; var points: [String] }
@@ -118,7 +125,8 @@ struct GeminiNotesView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 1).padding(.horizontal, 4)
-        .background(RoundedRectangle(cornerRadius: 5).fill(matches(clean) ? Color.yellow.opacity(0.18) : .clear))
+        .background(RoundedRectangle(cornerRadius: 5).fill(
+            matchesCite(clean) ? Theme.accent.opacity(0.18) : (matchesFind(clean) ? Color.yellow.opacity(0.18) : .clear)))
     }
 
     /// `[Owner] rest` → an accent owner chip + the text; otherwise plain.

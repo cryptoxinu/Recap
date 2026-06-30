@@ -40,6 +40,18 @@ struct ConversationStoreTests {
         #expect(try store.conversations(meetingID: "mt1").map(\.id) == ["mtg"])
     }
 
+    @Test("re-upserting a conversation (retitle/rescope) preserves its messages — no cascade wipe (gate MED)")
+    func upsertPreservesMessages() throws {
+        let store = try freshStore()
+        try store.upsertConversation(Conversation(id: "c", title: "old", createdAt: 1, updatedAt: 1))
+        try store.appendMessage(Message(id: "m1", conversationID: "c", role: .user, text: "hi", createdAt: 2))
+        try store.appendMessage(Message(id: "m2", conversationID: "c", role: .assistant, text: "hello", createdAt: 3))
+        // re-upsert SAME id with a new title — must NOT delete the messages
+        try store.upsertConversation(Conversation(id: "c", title: "renamed", createdAt: 1, updatedAt: 9))
+        #expect(try store.conversation(id: "c")?.title == "renamed")
+        #expect(try store.messages(conversationID: "c").map(\.id) == ["m1", "m2"])   // preserved
+    }
+
     @Test("rename + delete (messages cascade)")
     func renameDelete() throws {
         let store = try freshStore()

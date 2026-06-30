@@ -723,9 +723,13 @@ public final class Store: @unchecked Sendable {
 
     public func upsertConversation(_ c: Conversation) throws {
         try dbQueue.write { db in
+            // In-place UPSERT — NOT INSERT OR REPLACE, which would DELETE the row and cascade-wipe its
+            // messages on a retitle/rescope (Codex P4.5 gate MED).
             try db.execute(sql: """
-                INSERT OR REPLACE INTO conversations (id, title, meeting_id, created_at, updated_at)
+                INSERT INTO conversations (id, title, meeting_id, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  title=excluded.title, meeting_id=excluded.meeting_id, updated_at=excluded.updated_at
                 """, arguments: [c.id, c.title, c.meetingID, c.createdAt, c.updatedAt])
         }
     }

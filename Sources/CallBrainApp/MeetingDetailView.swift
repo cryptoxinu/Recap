@@ -36,6 +36,19 @@ struct MeetingDetailView: View {
         guard !q.isEmpty else { return [] }
         return groups.filter { $0.joined.lowercased().contains(q) || $0.speaker.lowercased().contains(q) }.map(\.id)
     }
+    /// Note lines matching the find query (Gemini notes render as one collapsed group, so the transcript
+    /// `matches` count would always be 1 — count actual lines instead; gate LOW).
+    private var noteMatchCount: Int {
+        let q = findText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return 0 }
+        return noteLines.filter { $0.lowercased().contains(q) }.count
+    }
+    /// The cited note snippet to accent-tint (Gemini notes have no scroll anchors; gate MED).
+    private var citedNoteSnippet: String {
+        guard isNotes, let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first
+        else { return "" }
+        return String(hit.text.prefix(60))
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -46,7 +59,8 @@ struct MeetingDetailView: View {
                         header
                         Divider()
                         if isNotes {
-                            GeminiNotesView(lines: noteLines, title: meeting?.title, highlight: findText)
+                            GeminiNotesView(lines: noteLines, title: meeting?.title,
+                                            highlight: findText, citedSnippet: citedNoteSnippet)
                         } else {
                             LazyVStack(alignment: .leading, spacing: 16) {
                                 ForEach(groups) { turn($0).id($0.id) }
@@ -85,11 +99,19 @@ struct MeetingDetailView: View {
     private func findBar(_ proxy: ScrollViewProxy) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Find in transcript…", text: $findText)
+            TextField(isNotes ? "Find in notes…" : "Find in transcript…", text: $findText)
                 .textFieldStyle(.plain)
                 .onSubmit { jump(+1, proxy) }
-                .onChange(of: findText) { _, _ in matchIndex = 0; if let f = matches.first { scrollTo(f, proxy) } }
-            if !matches.isEmpty {
+                .onChange(of: findText) { _, _ in matchIndex = 0; if !isNotes, let f = matches.first { scrollTo(f, proxy) } }
+            if isNotes {
+                // Notes have no scroll anchors → highlight-only, but report the real matching-line count.
+                if noteMatchCount > 0 {
+                    Text("\(noteMatchCount) match\(noteMatchCount == 1 ? "" : "es")")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if !findText.isEmpty {
+                    Text("No matches").font(.caption).foregroundStyle(.secondary)
+                }
+            } else if !matches.isEmpty {
                 Text("\(min(matchIndex + 1, matches.count)) / \(matches.count)")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 Button { jump(-1, proxy) } label: { Image(systemName: "chevron.up") }.buttonStyle(.plain)
