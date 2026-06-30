@@ -417,6 +417,26 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// Meeting metadata + person-entity sets for the near-duplicate scan (Phase 6).
+    public func meetingMetas(limit: Int = 1000) throws -> [MeetingMeta] {
+        try dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT id, title, date, source FROM meetings ORDER BY date_epoch DESC LIMIT ?",
+                                        arguments: [limit])
+            return try rows.map { r in
+                let id: String = r["id"]
+                let people = try String.fetchSet(db, sql:
+                    "SELECT name_lower FROM meeting_entities WHERE meeting_id = ? AND kind = 'person'",
+                    arguments: [id])
+                return MeetingMeta(id: id, title: r["title"], date: r["date"], source: r["source"], people: people)
+            }
+        }
+    }
+
+    /// Delete a meeting (cascades chunks/embeddings/utterances/entities/tasks) — Duplicate Review action.
+    public func deleteMeeting(id: String) throws {
+        try dbQueue.write { db in try db.execute(sql: "DELETE FROM meetings WHERE id = ?", arguments: [id]) }
+    }
+
     /// Top entities across the whole library (for an overview / filter chips).
     public func topEntities(kind: EntityKind? = nil, limit: Int = 30) throws -> [Entity] {
         try dbQueue.read { db in
