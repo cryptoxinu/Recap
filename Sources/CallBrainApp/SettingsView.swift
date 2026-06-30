@@ -117,7 +117,8 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button(drive.syncing ? "Syncing…" : "Sync now") { Task { await drive.syncNow() } }
-                        .disabled(drive.syncing || drive.folderName == nil)
+                        // Allow a manual sync for a folder OR a shared-with-me-only setup (no folder chosen).
+                        .disabled(drive.syncing || (drive.folderName == nil && !drive.includeShared))
                     Button("Disconnect", role: .destructive) { drive.disconnect() }
                     Spacer()
                     if drive.lastSyncCount > 0 {

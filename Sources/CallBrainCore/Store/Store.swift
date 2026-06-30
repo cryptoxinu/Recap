@@ -199,7 +199,8 @@ public final class Store: @unchecked Sendable {
         }
         m.registerMigration("v9_call_summary") { db in
             // Full markdown call summary for the Summary tab (Gemini-notes calls reuse Google's notes
-            // instead — no AI call). `summary_source`: "gemini" | "ai" so we know where it came from.
+            // instead — no AI call). `summary_source`: "local" (on-device Ollama) | "cloud" (CLI premium)
+            // | "gemini" (Google's notes) so we know where it came from.
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN call_summary TEXT;")
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN summary_source TEXT;")
         }
