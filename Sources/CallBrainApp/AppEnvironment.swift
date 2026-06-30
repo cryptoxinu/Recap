@@ -145,11 +145,9 @@ final class AppEnvironment {
     @discardableResult
     func generateCallSummary(for meetingID: String, preferCloud: Bool = false) async -> Bool {
         guard let m = try? store.meeting(id: meetingID) else { return false }
-        if m.source == "gmeet_gemini", !preferCloud {
-            try? store.setCallSummary(id: meetingID, summary: nil, source: "gemini")   // tab renders Google's notes
-            titlesRevision &+= 1
-            return true
-        }
+        // Every call gets a concise Summary-tab digest — including Gemini calls (we summarize Google's notes
+        // into a short digest; the full notes stay on the Transcript tab). Founder ask 2026-06-30: tabs on
+        // every call.
         let utts = (try? store.utterances(meetingID: meetingID)) ?? []
         let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -179,7 +177,7 @@ final class AppEnvironment {
     /// no summary yet). Re-checked just before an auto pass runs so a user "Regenerate" that already
     /// produced one isn't redundantly re-summarized by a stale queued job.
     func needsAutoSummary(_ meetingID: String) -> Bool {
-        guard let m = try? store.meeting(id: meetingID), m.source != "gmeet_gemini" else { return false }
+        guard let m = try? store.meeting(id: meetingID) else { return false }
         return m.callSummary?.isEmpty ?? true
     }
 
@@ -188,6 +186,54 @@ final class AppEnvironment {
 
     /// On launch, queue summaries for any calls that don't have one yet — serialized + battery-gated.
     func backfillSummaries() { summaries.backfillMissing(recentMeetings()) }
+
+    // MARK: - call categorization (Ambient / Further Health / Other)
+
+    /// Heuristic-first, with a local-LLM tiebreaker only for genuinely ambiguous calls (free + private).
+    private var categoryEngine: CategoryEngine { CategoryEngine() }
+    @ObservationIgnored private var pendingCategory: [String] = []
+    @ObservationIgnored private var categoryDraining = false
+
+    /// Classify one call into its venture and persist it. Skips calls the user categorized by hand.
+    @discardableResult
+    func classifyCategory(for meetingID: String) async -> Bool {
+        guard let m = try? store.meeting(id: meetingID), !m.categoryManual else { return false }
+        let utts = (try? store.utterances(meetingID: meetingID)) ?? []
+        let people = ((try? store.entities(meetingID: meetingID)) ?? [])
+            .filter { $0.kind == .person }.map(\.name)
+        let body = utts.prefix(80).map(\.text).joined(separator: " ")
+        let signal = [m.displayTitle, m.title, m.aiSummary ?? "", m.callSummary ?? "",
+                      people.joined(separator: " "), body].joined(separator: "\n")
+        let r = await categoryEngine.categorize(text: signal)
+        try? store.setCategory(id: meetingID, category: r.category.rawValue, confidence: r.confidence, manual: false)
+        titlesRevision &+= 1
+        return true
+    }
+
+    /// Queue classification on a SERIAL chain — confident heuristic calls return instantly, so the only
+    /// thing that ever serializes is the rare LLM tiebreaker (never many local-model calls at once).
+    func classifyInBackground(_ meetingID: String) {
+        if !pendingCategory.contains(meetingID) { pendingCategory.append(meetingID) }
+        guard !categoryDraining else { return }
+        categoryDraining = true
+        Task { [weak self] in
+            while let self, !self.pendingCategory.isEmpty {
+                await self.classifyCategory(for: self.pendingCategory.removeFirst())
+            }
+            self?.categoryDraining = false
+        }
+    }
+
+    /// On launch, classify any calls that don't have a category yet.
+    func backfillCategories() {
+        for m in recentMeetings() where (m.category?.isEmpty ?? true) { classifyInBackground(m.id) }
+    }
+
+    /// User picked a category by hand — pinned (auto-classification won't overwrite it).
+    func setCategoryManual(_ meetingID: String, _ category: CallCategory) {
+        try? store.setCategory(id: meetingID, category: category.rawValue, confidence: 1.0, manual: true)
+        titlesRevision &+= 1
+    }
 
     struct ReconcileSummary: Sendable { let reworded: Int; let completed: Int; let deduped: Int; let added: Int }
 

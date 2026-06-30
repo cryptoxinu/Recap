@@ -5,6 +5,7 @@ struct MeetingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var meetings: [Store.MeetingRow] = []
     @State private var query = ""
+    @State private var categoryFilter: CallCategory?      // nil = all ventures
     @State private var dupCount = 0
     @State private var showDupReview = false
     @State private var pendingDelete: Store.MeetingRow?
@@ -17,8 +18,16 @@ struct MeetingsView: View {
 
     private var filtered: [Store.MeetingRow] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return meetings }
-        return meetings.filter { $0.title.lowercased().contains(q) || $0.source.lowercased().contains(q) }
+        return meetings.filter { m in
+            if let cat = categoryFilter, CallCategory(stored: m.category) != cat { return false }
+            guard !q.isEmpty else { return true }
+            return m.displayTitle.lowercased().contains(q) || m.title.lowercased().contains(q)
+                || m.source.lowercased().contains(q)
+        }
+    }
+
+    private func count(_ cat: CallCategory) -> Int {
+        meetings.filter { CallCategory(stored: $0.category) == cat }.count
     }
 
     var body: some View {
@@ -33,6 +42,13 @@ struct MeetingsView: View {
                         List(filtered) { m in
                             NavigationLink(value: m.id) { row(m) }
                                 .contextMenu {
+                                    Menu {
+                                        ForEach(CallCategory.allCases, id: \.self) { c in
+                                            Button { env.setCategoryManual(m.id, c); reload() } label: {
+                                                Label(c.label, systemImage: CallCategory(stored: m.category) == c ? "checkmark" : "circle")
+                                            }
+                                        }
+                                    } label: { Label("Category", systemImage: "tag") }
                                     Button(role: .destructive) { pendingDelete = m } label: {
                                         Label("Delete call…", systemImage: "trash")
                                     }
@@ -51,9 +67,11 @@ struct MeetingsView: View {
             }
             .navigationTitle("Meetings")
             .searchable(text: $query, prompt: "Search calls")
+            .toolbar { ToolbarItem(placement: .primaryAction) { categoryFilterMenu } }
         }
         .task {
             reload()
+            env.backfillCategories()    // tag any calls that don't have a venture yet
             if ProcessInfo.processInfo.environment["CALLBRAIN_DUPREVIEW"] == "1" { showDupReview = true }
         }
         .onChange(of: env.titlesRevision) { reload() }   // live-refresh as AI titles land
@@ -81,6 +99,19 @@ struct MeetingsView: View {
         } message: { Text(deleteError ?? "") }
     }
 
+    private var categoryFilterMenu: some View {
+        Menu {
+            Picker("Filter", selection: $categoryFilter) {
+                Text("All ventures").tag(CallCategory?.none)
+                ForEach(CallCategory.allCases, id: \.self) { c in
+                    Text("\(c.label) (\(count(c)))").tag(CallCategory?.some(c))
+                }
+            }
+        } label: {
+            Label(categoryFilter?.label ?? "All ventures", systemImage: "line.3.horizontal.decrease.circle")
+        }
+    }
+
     private var dupBanner: some View {
         Button { showDupReview = true } label: {
             HStack(spacing: 8) {
@@ -103,18 +134,54 @@ struct MeetingsView: View {
         dupCount = DuplicateScan.count(env.store)
     }
 
+    /// True when the AI gave the call a meaningful name that differs from its raw (often date-stamp) title.
+    private func renamed(_ m: Store.MeetingRow) -> Bool {
+        (m.aiTitle?.isEmpty == false) && m.aiTitle != m.title
+    }
+
     private func row(_ m: Store.MeetingRow) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent).font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text(m.displayTitle).bold().lineLimit(1)
+                Text(m.displayTitle).bold().lineLimit(1)                       // AI smart title
                 if let s = m.aiSummary, !s.isEmpty {
                     Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Text("\(m.date) · \(m.source)").font(.caption2).foregroundStyle(.tertiary)
+                // Original title (when the AI renamed it) so a date-stamped call still shows its raw name.
+                Text(renamed(m) ? "\(m.title) · \(sourceLabel(m.source))" : "\(m.date) · \(sourceLabel(m.source))")
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
             }
             Spacer()
+            if m.category != nil { CategoryTag(category: CallCategory(stored: m.category)) }
         }
         .padding(.vertical, 4)
+    }
+
+    private func sourceLabel(_ s: String) -> String {
+        switch s {
+        case "gmeet_gemini": "Google Meet notes"
+        case "gmeet_local", "gmeet_cloud": "Recording"
+        case "fireflies": "Fireflies"; case "fathom": "Fathom"; case "cluely": "Cluely"
+        case "paste": "Pasted"; default: s
+        }
+    }
+}
+
+/// A small colored pill showing which venture a call belongs to.
+struct CategoryTag: View {
+    let category: CallCategory
+    var body: some View {
+        Text(category.label)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Self.color(category).opacity(0.16), in: Capsule())
+            .foregroundStyle(Self.color(category))
+    }
+    static func color(_ c: CallCategory) -> Color {
+        switch c {
+        case .ambient: .blue
+        case .furtherHealth: .green
+        case .other: .secondary
+        }
     }
 }

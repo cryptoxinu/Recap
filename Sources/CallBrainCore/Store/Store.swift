@@ -204,6 +204,14 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN call_summary TEXT;")
             try db.execute(sql: "ALTER TABLE meetings ADD COLUMN summary_source TEXT;")
         }
+        m.registerMigration("v10_category") { db in
+            // Which venture a call belongs to (Ambient / Further Health / Other) for tagging + filtering.
+            // `category_manual` = 1 means the user set it by hand, so auto-classification won't overwrite it.
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN category TEXT;")
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN category_confidence REAL;")
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN category_manual INTEGER NOT NULL DEFAULT 0;")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS ix_meetings_category ON meetings(category);")
+        }
         return m
     }()
 
@@ -489,14 +497,15 @@ public final class Store: @unchecked Sendable {
     /// Meeting metadata + person-entity sets for the near-duplicate scan (Phase 6).
     public func meetingMetas(limit: Int = 1000) throws -> [MeetingMeta] {
         try dbQueue.read { db in
-            let rows = try Row.fetchAll(db, sql: "SELECT id, title, date, source FROM meetings ORDER BY date_epoch DESC LIMIT ?",
+            let rows = try Row.fetchAll(db, sql: "SELECT id, title, ai_title, date, source FROM meetings ORDER BY date_epoch DESC LIMIT ?",
                                         arguments: [limit])
             return try rows.map { r in
                 let id: String = r["id"]
                 let people = try String.fetchSet(db, sql:
                     "SELECT name_lower FROM meeting_entities WHERE meeting_id = ? AND kind = 'person'",
                     arguments: [id])
-                return MeetingMeta(id: id, title: r["title"], date: r["date"], source: r["source"], people: people)
+                return MeetingMeta(id: id, title: r["title"], smartTitle: r["ai_title"],
+                                   date: r["date"], source: r["source"], people: people)
             }
         }
     }
@@ -643,16 +652,19 @@ public final class Store: @unchecked Sendable {
         public var aiSummary: String? = nil
         public var callSummary: String? = nil      // full markdown summary (Summary tab)
         public var summarySource: String? = nil    // "local" | "cloud" | "gemini"
+        public var category: String? = nil         // "ambient" | "further_health" | "other"
+        public var categoryManual: Bool = false    // user set it by hand → don't auto-overwrite
         /// The proper AI title if we have one, else the original (filename-derived) title.
         public var displayTitle: String { (aiTitle?.isEmpty == false) ? aiTitle! : title }
         static func from(_ r: Row) -> MeetingRow {
             MeetingRow(id: r["id"], title: r["title"], date: r["date"], source: r["source"],
                        aiTitle: r["ai_title"], aiSummary: r["ai_summary"],
-                       callSummary: r["call_summary"], summarySource: r["summary_source"])
+                       callSummary: r["call_summary"], summarySource: r["summary_source"],
+                       category: r["category"], categoryManual: (r["category_manual"] as Int? ?? 0) != 0)
         }
     }
 
-    static let meetingCols = "id, title, date, source, ai_title, ai_summary, call_summary, summary_source"
+    static let meetingCols = "id, title, date, source, ai_title, ai_summary, call_summary, summary_source, category, category_manual"
 
     public func recentMeetings(limit: Int = 200) throws -> [MeetingRow] {
         try dbQueue.read { db in
@@ -676,6 +688,16 @@ public final class Store: @unchecked Sendable {
         try dbQueue.write { db in
             try db.execute(sql: "UPDATE meetings SET call_summary = ?, summary_source = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = ?",
                            arguments: [summary, source, id])
+        }
+    }
+
+    /// Persist a call's category. `manual` marks a user choice that auto-classification must not override.
+    public func setCategory(id: String, category: String, confidence: Double?, manual: Bool) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE meetings SET category = ?, category_confidence = ?, category_manual = ?,
+                       updated_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = ?
+                """, arguments: [category, confidence, manual ? 1 : 0, id])
         }
     }
 

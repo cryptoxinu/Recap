@@ -3,13 +3,17 @@ import Foundation
 /// Lightweight metadata for near-duplicate scanning (Phase 6).
 public struct MeetingMeta: Sendable, Equatable {
     public let id: String
-    public let title: String
+    public let title: String            // the ORIGINAL title (often a date-time stamp for auto-named calls)
+    public let smartTitle: String?      // the AI-detected meaningful name, when present
     public let date: String
     public let source: String
-    public let people: Set<String>     // lowercased person names (NER / participants)
-    public init(id: String, title: String, date: String, source: String, people: Set<String>) {
-        self.id = id; self.title = title; self.date = date; self.source = source; self.people = people
+    public let people: Set<String>      // lowercased person names (NER / participants)
+    public init(id: String, title: String, smartTitle: String? = nil, date: String, source: String, people: Set<String>) {
+        self.id = id; self.title = title; self.smartTitle = smartTitle
+        self.date = date; self.source = source; self.people = people
     }
+    /// The meaningful name to match + display on — the AI title when we have one, else the raw title.
+    public var displayTitle: String { (smartTitle?.isEmpty == false) ? smartTitle! : title }
 }
 
 /// A *suggested* near-duplicate pair — heuristic, never auto-merged. The user confirms (delete one) or
@@ -30,10 +34,13 @@ public enum DuplicateDetector {
     /// Generic auto-titles carry no identity → never match two meetings on title alone.
     static let genericTitles: Set<String> = ["untitled meeting", "imported call", "recorded meeting", "recorded call"]
 
-    /// Suggest near-duplicate pairs. Both meetings share a DATE; then we need a *strong* signal — a real
-    /// people overlap (≥2 shared, high Jaccard) OR a strong non-generic title match. A single shared 1:1
-    /// person, or two same-day "Untitled" imports, are NOT flagged (Codex P6 gate MED — false positives
-    /// paired with an irreversible delete are unsafe).
+    /// Suggest near-duplicate pairs. The ONLY signals strong enough to pair (since the action is an
+    /// irreversible delete) are:
+    ///  • cross-source + same day + real people overlap — the same call captured by two tools; OR
+    ///  • a strong, NON-generic *meaningful-title* match (uses the AI title, not the date-time stamp).
+    /// Crucially, two DIFFERENT same-source calls on the same day with the same recurring team (e.g. two
+    /// Ambient standups) are NOT flagged — shared attendees alone is not duplication (founder bug
+    /// 2026-06-30: two different-time calls flagged "100% match" on their "Meeting started <date>" titles).
     public static func suggestions(_ meetings: [MeetingMeta]) -> [DuplicateSuggestion] {
         var byDate: [String: [MeetingMeta]] = [:]
         for m in meetings { byDate[m.date, default: []].append(m) }
@@ -44,23 +51,23 @@ public enum DuplicateDetector {
                 for j in (i + 1)..<group.count {
                     let a = group[i], b = group[j]
                     let shared = a.people.intersection(b.people).count
-                    let people = jaccard(a.people, b.people)
                     // First-name-normalized overlap too, so the SAME call recorded by two tools that format
                     // names differently ("Zade Kal" vs "Zade") still matches across sources.
                     let aFirst = firstNames(a.people), bFirst = firstNames(b.people)
                     let sharedFirst = aFirst.intersection(bFirst).count
-                    let peopleFirst = jaccard(aFirst, bFirst)
-                    let title = genericPair(a.title, b.title) ? 0 : titleJaccard(a.title, b.title)
+                    let peopleFirst = jaccard(aFirst, bFirst), people = jaccard(a.people, b.people)
+                    // Match on the MEANINGFUL title (AI title), never the date-time stamp — and only when
+                    // both titles are non-generic.
+                    let title = genericPair(a.displayTitle, b.displayTitle) ? 0 : titleJaccard(a.displayTitle, b.displayTitle)
 
-                    let strongPeople = shared >= 2 && people >= 0.6
                     // Cross-source + same-day is itself a strong signal (two tools rarely record the same
-                    // day + people unless it's the same call), so the people bar is lower here.
+                    // day + people unless it's the same call).
                     let crossSourceSameCall = a.source != b.source
                         && max(shared, sharedFirst) >= 2 && max(people, peopleFirst) >= 0.4
                     let strongTitle = title >= 0.6
-                    guard strongPeople || crossSourceSameCall || strongTitle else { continue }
+                    guard crossSourceSameCall || strongTitle else { continue }
 
-                    let score = max(people, title)
+                    let score = max(crossSourceSameCall ? max(people, peopleFirst) : 0, title)
                     out.append(DuplicateSuggestion(a: a, b: b, score: score,
                         reason: reason(a, b, crossSource: crossSourceSameCall, strongTitle: strongTitle)))
                 }
@@ -69,9 +76,18 @@ public enum DuplicateDetector {
         return out.sorted { $0.score > $1.score }
     }
 
+    /// A title with no identity for matching: the small fixed set, or an auto-generated date/time stamp
+    /// title ("Meeting started 2026-06-24 12-32 PDT", "Meeting on 2026-06-24", a bare date).
+    static func isGenericTitle(_ s: String) -> Bool {
+        let t = s.lowercased().trimmingCharacters(in: .whitespaces)
+        if t.isEmpty || genericTitles.contains(t) { return true }
+        if t.hasPrefix("meeting started") || t.hasPrefix("meeting on") || t.hasPrefix("new meeting") { return true }
+        // Contains a yyyy-mm-dd / yyyy/mm/dd date stamp → it's an auto-name, not a real subject.
+        return t.range(of: #"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"#, options: .regularExpression) != nil
+    }
+
     private static func genericPair(_ a: String, _ b: String) -> Bool {
-        genericTitles.contains(a.lowercased().trimmingCharacters(in: .whitespaces))
-            || genericTitles.contains(b.lowercased().trimmingCharacters(in: .whitespaces))
+        isGenericTitle(a) || isGenericTitle(b)
     }
 
     static func reason(_ a: MeetingMeta, _ b: MeetingMeta, crossSource: Bool, strongTitle: Bool) -> String {

@@ -73,9 +73,13 @@ struct DuplicateReviewView: View {
 
     private func meetingCol(_ m: MeetingMeta) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(m.title).font(.body.weight(.medium)).lineLimit(1)
+            Text(m.displayTitle).font(.body.weight(.medium)).lineLimit(2)   // the meaningful AI title
+            // Show the original date-stamp title too, so it's clear which raw call this is.
+            if m.smartTitle?.isEmpty == false, m.title != m.displayTitle {
+                Text(m.title).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+            }
             Text("\(m.date) · \(sourceLabel(m.source))").font(.caption).foregroundStyle(.secondary)
-            Button(role: .destructive) { confirmDelete = (m.id, m.title) } label: {
+            Button(role: .destructive) { confirmDelete = (m.id, m.displayTitle) } label: {
                 Label("Delete this one", systemImage: "trash").font(.caption)
             }
             .buttonStyle(.borderless).padding(.top, 2)

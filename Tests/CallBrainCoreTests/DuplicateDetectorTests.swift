@@ -89,4 +89,44 @@ struct DuplicateDetectorTests {
         #expect(DuplicateDetector.jaccard(Set(["a", "b"]), Set(["a", "c"])) == 1.0 / 3.0)
         #expect(DuplicateDetector.titleJaccard("Weekly sync call", "weekly sync") > 0.5)
     }
+
+    private func mSmart(_ id: String, _ title: String, _ smart: String?, _ date: String, _ source: String, _ people: [String]) -> MeetingMeta {
+        MeetingMeta(id: id, title: title, smartTitle: smart, date: date, source: source, people: Set(people.map { $0.lowercased() }))
+    }
+
+    @Test("FOUNDER BUG: two different same-source calls (date-stamp titles, shared team) are NOT flagged")
+    func dateStampSameSourceNotFlagged() {
+        // Two distinct Ambient standups the same day, same recurring team, both auto-named after a timestamp,
+        // each with its OWN meaningful AI title. Must not be paired (the screenshot's false "100% match").
+        let metas = [
+            mSmart("a", "Meeting started 2026-06-24 10-09 PDT", "Ambient Network Architecture Review",
+                   "2026-06-24", "gmeet_gemini", ["Max", "Travis", "Zade", "Gregory"]),
+            mSmart("b", "Meeting started 2026-06-24 12-32 PDT", "Render Integration & Pearl Risk Review",
+                   "2026-06-24", "gmeet_gemini", ["Max", "Travis", "Zade", "Gregory"]),
+        ]
+        #expect(DuplicateDetector.suggestions(metas).isEmpty)
+    }
+
+    @Test("date-stamp titles with NO smart title are treated as generic (not title-matched)")
+    func dateStampNoSmartTitleNotFlagged() {
+        let metas = [
+            m("a", "Meeting started 2026-06-24 10-09 PDT", "2026-06-24", "gmeet_gemini", ["Max", "Zade"]),
+            m("b", "Meeting started 2026-06-24 12-32 PDT", "2026-06-24", "gmeet_gemini", ["Max", "Zade"]),
+        ]
+        #expect(DuplicateDetector.isGenericTitle("Meeting started 2026-06-24 12-32 PDT"))
+        #expect(DuplicateDetector.suggestions(metas).isEmpty)
+    }
+
+    @Test("matching uses the SMART title: identical smart titles across sources DO flag")
+    func smartTitleMatches() {
+        let metas = [
+            mSmart("a", "Meeting started 2026-06-24 10-09 PDT", "Render Integration Review",
+                   "2026-06-24", "gmeet_gemini", ["Max"]),
+            mSmart("b", "Recording 1", "Render Integration Review",
+                   "2026-06-24", "fathom", ["Travis"]),
+        ]
+        let s = DuplicateDetector.suggestions(metas)
+        #expect(s.count == 1)
+        #expect(s[0].a.displayTitle == "Render Integration Review")
+    }
 }

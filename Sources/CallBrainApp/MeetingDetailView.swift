@@ -25,8 +25,9 @@ struct MeetingDetailView: View {
     enum Tab: String, CaseIterable { case summary = "Summary", transcript = "Transcript" }
 
     private var isNotes: Bool { meeting?.source == "gmeet_gemini" }
-    /// Gemini calls are AI notes only (no verbatim transcript) → no Transcript tab; the rest get both.
-    private var showsTabs: Bool { !isNotes }
+    /// Every call shows Summary | Transcript tabs (founder ask). For a Gemini call the Transcript tab holds
+    /// Google's full notes (there's no word-for-word transcript), and the Summary tab a concise digest.
+    private var showsTabs: Bool { true }
     private var hasSummary: Bool { !(meeting?.callSummary?.isEmpty ?? true) }
 
     struct TurnGroup: Identifiable {
@@ -65,10 +66,14 @@ struct MeetingDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         header
-                        if showsTabs { tabPicker }
+                        tabPicker
                         Divider()
-                        if tab == .summary || !showsTabs {
+                        if tab == .summary {
                             summaryTab
+                        } else if isNotes {
+                            // A Gemini call's "transcript" is Google's full notes (no verbatim transcript).
+                            GeminiNotesView(lines: noteLines, title: meeting?.title,
+                                            highlight: findText, citedSnippet: citedNoteSnippet)
                         } else {
                             LazyVStack(alignment: .leading, spacing: 16) {
                                 ForEach(groups) { turn($0).id($0.id) }
@@ -150,6 +155,12 @@ struct MeetingDetailView: View {
         withAnimation(.easeInOut) { proxy.scrollTo(id, anchor: .center) }
     }
 
+    /// True when the AI gave the call a meaningful name that differs from its raw (often date-stamp) title.
+    private var renamed: Bool {
+        guard let m = meeting else { return false }
+        return (m.aiTitle?.isEmpty == false) && m.aiTitle != m.title
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(meeting?.displayTitle ?? "Meeting").font(.largeTitle).bold()
@@ -160,11 +171,13 @@ struct MeetingDetailView: View {
                 HStack(spacing: 14) {
                     Label(m.date, systemImage: "calendar")
                     Label(sourceLabel(m.source), systemImage: "doc.text")
+                    if renamed { Label(m.title, systemImage: "tag").lineLimit(1) }   // original title
                     if isNotes {
                         Label("AI meeting notes", systemImage: "sparkles")
                     } else {
                         Label("\(groups.count) turns", systemImage: "bubble.left.and.bubble.right")
                     }
+                    if m.category != nil { CategoryTag(category: CallCategory(stored: m.category)) }
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -236,10 +249,7 @@ struct MeetingDetailView: View {
                 Spacer()
                 summaryStatusLabel
             }
-            if isNotes && !hasSummary {
-                GeminiNotesView(lines: noteLines, title: meeting?.title,
-                                highlight: findText, citedSnippet: citedNoteSnippet)
-            } else if let s = meeting?.callSummary, !s.isEmpty {
+            if let s = meeting?.callSummary, !s.isEmpty {
                 MarkdownAnswerView(text: s)
             } else if isSummarizing {
                 HStack(spacing: 8) {
@@ -249,7 +259,8 @@ struct MeetingDetailView: View {
             } else {
                 Text(autoPaused
                      ? "Summary paused to save battery — generate it now below."
-                     : "No summary yet — generate one below.")
+                     : (isNotes ? "Summarizing Google's notes… (full notes are on the Transcript tab)"
+                                : "No summary yet — generate one below."))
                     .foregroundStyle(.secondary)
             }
             regenerateBar
@@ -272,17 +283,11 @@ struct MeetingDetailView: View {
                 ProgressView().controlSize(.small)
                 Text(isSummarizing ? "Summarizing…" : "Queued…").font(.caption).foregroundStyle(.secondary)
             } else {
-                // Local pass only for non-Gemini calls — on a Gemini call "local" just reuses Google's notes
-                // and would discard an AI summary, so Gemini gets the AI button alone.
-                if !isNotes {
-                    Button { generate(cloud: false) } label: {
-                        Label(hasSummary ? "Regenerate" : "Generate summary", systemImage: "arrow.clockwise")
-                    }
+                Button { generate(cloud: false) } label: {
+                    Label(hasSummary ? "Regenerate" : "Generate summary", systemImage: "arrow.clockwise")
                 }
-                Button { generate(cloud: true) } label: {
-                    Label(isNotes ? "Summarize with AI" : "Regenerate with AI", systemImage: "sparkles")
-                }
-                .help("Use your Claude / Codex subscription for a premium-quality pass")
+                Button { generate(cloud: true) } label: { Label("Regenerate with AI", systemImage: "sparkles") }
+                    .help("Use your Claude / Codex subscription for a premium-quality pass")
             }
         }
         .font(.callout)
@@ -307,7 +312,7 @@ struct MeetingDetailView: View {
     /// pass usually beat us here; this covers calls imported before the feature). Battery-gated by the
     /// scheduler. Gemini calls reuse Google's notes — no generation.
     private func autoSummarizeIfNeeded() async {
-        guard !didAutoSummarize, !isNotes, !hasSummary else { return }
+        guard !didAutoSummarize, !hasSummary else { return }   // every call gets a digest, Gemini included
         didAutoSummarize = true
         env.summaries.enqueueAuto(meetingID)
     }

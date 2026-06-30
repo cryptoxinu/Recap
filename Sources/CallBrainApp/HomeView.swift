@@ -22,7 +22,7 @@ struct HomeView: View {
             askColumn
         }
         .navigationTitle("Home")
-        .task { meetings = env.recentMeetings(); env.backfillTitleIntelligence(); env.backfillSummaries() }
+        .task { meetings = env.recentMeetings(); env.backfillTitleIntelligence(); env.backfillSummaries(); env.backfillCategories() }
         .onChange(of: env.titlesRevision) { meetings = env.recentMeetings() }   // live-refresh as AI titles land
         .sheet(item: $openMeetingID) { id in
             NavigationStack {
