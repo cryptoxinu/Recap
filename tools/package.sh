@@ -27,6 +27,7 @@ echo "▸ assemble .app bundle"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/.build/release/CallBrainApp" "$APP/Contents/MacOS/CallBrain"
 cp "$ROOT/tools/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
 
 echo "▸ codesign (Hardened Runtime, leaf-first: any embedded dylibs/frameworks before the app)"

@@ -49,6 +49,7 @@ let package = Package(
         .executableTarget(
             name: "CallBrainApp",
             dependencies: ["CallBrainCore", "CallBrainTranscribe"],
+            resources: [.copy("Resources/AppIcon.png")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(

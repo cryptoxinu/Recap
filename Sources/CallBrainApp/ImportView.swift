@@ -16,13 +16,17 @@ struct ImportView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
-                if let err = coordinator.lastError { errorBanner(err) }
+                if let err = coordinator.lastError {
+                    errorBanner(err).transition(.move(edge: .top).combined(with: .opacity))
+                }
                 dropZone
                 pasteSection
                 queueSection
             }
             .padding(24)
             .frame(maxWidth: 900, alignment: .topLeading)
+            .animation(Theme.smooth, value: coordinator.lastError)
+            .animation(Theme.springy, value: coordinator.jobs.count)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .navigationTitle("Import")
@@ -126,6 +130,7 @@ struct ImportView: View {
             .buttonStyle(.plain).foregroundStyle(Theme.accent)
 
             if showPaste {
+                VStack(alignment: .leading, spacing: 10) {
                 TextEditor(text: $raw)
                     .font(.callout.monospaced())
                     .scrollContentBackground(.hidden)
@@ -143,6 +148,8 @@ struct ImportView: View {
                     .disabled(raw.trimmingCharacters(in: .whitespaces).isEmpty)
                     Spacer()
                 }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }

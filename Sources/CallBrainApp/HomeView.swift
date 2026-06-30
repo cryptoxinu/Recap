@@ -22,8 +22,13 @@ struct HomeView: View {
             askColumn
         }
         .navigationTitle("Home")
-        .task { meetings = env.recentMeetings(); env.backfillTitleIntelligence(); env.backfillSummaries(); env.backfillCategories() }
-        .onChange(of: env.titlesRevision) { meetings = env.recentMeetings() }   // live-refresh as AI titles land
+        .task {
+            withAnimation(Theme.springy) { meetings = env.recentMeetings() }
+            env.backfillTitleIntelligence(); env.backfillSummaries(); env.backfillCategories()
+        }
+        .onChange(of: env.titlesRevision) {   // live-refresh as AI titles/categories land — animated, not popped
+            withAnimation(Theme.springy) { meetings = env.recentMeetings() }
+        }
         .sheet(item: $openMeetingID) { id in
             NavigationStack {
                 MeetingWorkspaceView(meetingID: id)
@@ -44,6 +49,7 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(RoundedRectangle(cornerRadius: 10).fill(.orange.opacity(0.12)))
+                        .transition(.opacity)
                 }
 
                 HStack(spacing: 14) {
@@ -61,15 +67,17 @@ struct HomeView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .cbCard()
+                    .transition(.opacity)
                 } else {
                     VStack(spacing: 0) {
                         ForEach(meetings.prefix(12)) { m in
-                            Button { openMeetingID = m.id } label: { recentRow(m) }
+                            Button { openMeetingID = m.id } label: { recentRow(m).cbHoverRow() }
                                 .buttonStyle(.plain)
                             if m.id != meetings.prefix(12).last?.id { Divider() }
                         }
                     }
-                    .cbCard()
+                    .cbCard(padding: 6)
+                    .transition(.opacity)
                 }
             }
             .padding(24)
@@ -122,7 +130,7 @@ struct HomeView: View {
                 .font(.title3).foregroundStyle(tint)
                 .frame(width: 38, height: 38)
                 .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-            Text(value).font(.title3).bold()
+            Text(value).font(.title3).bold().contentTransition(.numericText())
             Text(title).font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

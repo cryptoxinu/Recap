@@ -40,9 +40,10 @@ struct TasksView: View {
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(0.1)))
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 if rows.isEmpty {
-                    emptyState
+                    emptyState.transition(.opacity)
                 } else {
                     ForEach(grouped, id: \.0) { owner, items in
                         VStack(alignment: .leading, spacing: 8) {
@@ -107,7 +108,7 @@ struct TasksView: View {
 
     private func load() {
         let status: ActionItem.Status? = filter == .all ? nil : (filter == .open ? .open : .done)
-        rows = (try? env.store.tasks(status: status)) ?? []
+        withAnimation(Theme.springy) { rows = (try? env.store.tasks(status: status)) ?? [] }
     }
 
     private func tidy() {
@@ -118,18 +119,20 @@ struct TasksView: View {
             tidying = false
             load()
             if let r = result {
+                var msg: String
                 if r.reworded + r.completed + r.deduped + r.added == 0 {
-                    tidySummary = "Your task list is already tidy — nothing to change."
+                    msg = "Your task list is already tidy — nothing to change."
                 } else {
                     var parts: [String] = []
                     if r.reworded > 0 { parts.append("reworded \(r.reworded)") }
                     if r.added > 0 { parts.append("added \(r.added)") }
                     if r.completed > 0 { parts.append("marked \(r.completed) done") }
                     if r.deduped > 0 { parts.append("merged \(r.deduped) duplicate\(r.deduped == 1 ? "" : "s")") }
-                    tidySummary = "Tidied: " + parts.joined(separator: " · ") + "."
+                    msg = "Tidied: " + parts.joined(separator: " · ") + "."
                 }
+                withAnimation(Theme.springy) { tidySummary = msg }
             } else {
-                tidySummary = "Couldn't reach the AI to tidy tasks — try again."
+                withAnimation(Theme.springy) { tidySummary = "Couldn't reach the AI to tidy tasks — try again." }
             }
         }
     }
@@ -152,6 +155,8 @@ private struct TaskRowView: View {
             Button(action: onToggle) {
                 Image(systemName: row.item.status == .done ? "checkmark.circle.fill" : "circle")
                     .font(.title3).foregroundStyle(row.item.status == .done ? .green : .secondary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: row.item.status)
             }
             .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 3) {

@@ -6,6 +6,11 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // Brand the Dock/⌘-Tab icon (works for the dev run too, which has no .icns bundle).
+        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+           let icon = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = icon
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
     // Closing the window leaves CallBrain alive in the menu bar (so background imports/transcriptions
@@ -113,23 +118,30 @@ struct RootView: View {
             .navigationTitle("CallBrain")
             .safeAreaInset(edge: .bottom) { appearancePicker }
         } detail: {
-            // CALLBRAIN_MEETING=<id> opens straight to a meeting detail (screenshot QA only).
-            if let mid = ProcessInfo.processInfo.environment["CALLBRAIN_MEETING"], !mid.isEmpty {
-                MeetingWorkspaceView(meetingID: mid)
-            } else {
-                switch selection ?? .home {
-                case .home: HomeView()
-                case .ask: AskView()
-                case .meetings: MeetingsView()
-                case .tasks: TasksView()
-                case .imports: ImportView()
-                case .settings: SettingsView()
-                }
-            }
+            detailContent
+                .transition(.opacity)
+                .id(selection ?? .home)                       // treat each tab as a replaced subtree…
+                .animation(Theme.smooth, value: selection)    // …so tabs cross-fade instead of hard-cutting
         }
         .preferredColorScheme(appearanceMode.scheme)
         .task { NotificationManager.refresh(openTaskCount: env.openTaskCount()) }
         .sheet(isPresented: $showWelcome) { WelcomeView() }
+    }
+
+    @ViewBuilder private var detailContent: some View {
+        // CALLBRAIN_MEETING=<id> opens straight to a meeting detail (screenshot QA only).
+        if let mid = ProcessInfo.processInfo.environment["CALLBRAIN_MEETING"], !mid.isEmpty {
+            MeetingWorkspaceView(meetingID: mid)
+        } else {
+            switch selection ?? .home {
+            case .home: HomeView()
+            case .ask: AskView()
+            case .meetings: MeetingsView()
+            case .tasks: TasksView()
+            case .imports: ImportView()
+            case .settings: SettingsView()
+            }
+        }
     }
 
     /// Light / dark / system selector, pinned to the bottom of the sidebar.

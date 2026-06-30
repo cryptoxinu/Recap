@@ -5,6 +5,8 @@ import SwiftUI
 struct WelcomeView: View {
     @Environment(\.dismiss) private var dismiss
     static let seenKey = "callbrain.hasSeenWelcome"
+    @State private var appeared = false
+    @State private var ctaHover = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -32,10 +34,17 @@ struct WelcomeView: View {
                 Text("Get started").font(.headline).frame(maxWidth: 220).padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent).tint(Theme.accent)
+            .scaleEffect(ctaHover ? 1.03 : 1)
+            .shadow(color: Theme.accent.opacity(ctaHover ? 0.35 : 0), radius: 10, y: 4)
+            .animation(Theme.springy, value: ctaHover)
+            .onHover { ctaHover = $0 }
             .padding(.top, 4)
         }
         .padding(40)
         .frame(minWidth: 620, minHeight: 600)
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 14)
+        .onAppear { withAnimation(.spring(response: 0.55, dampingFraction: 0.85)) { appeared = true } }
     }
 
     private func row(_ icon: String, _ title: String, _ body: String) -> some View {

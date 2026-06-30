@@ -62,23 +62,13 @@ struct MeetingDetailView: View {
     var body: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
-                if findActive { findBar(proxy) }
+                if findActive { findBar(proxy).transition(.move(edge: .top).combined(with: .opacity)) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         header
                         tabPicker
                         Divider()
-                        if tab == .summary {
-                            summaryTab
-                        } else if isNotes {
-                            // A Gemini call's "transcript" is Google's full notes (no verbatim transcript).
-                            GeminiNotesView(lines: noteLines, title: meeting?.title,
-                                            highlight: findText, citedSnippet: citedNoteSnippet)
-                        } else {
-                            LazyVStack(alignment: .leading, spacing: 16) {
-                                ForEach(groups) { turn($0).id($0.id) }
-                            }
-                        }
+                        tabContent.animation(Theme.springy, value: tab)
                     }
                     .padding(28)
                     .frame(maxWidth: 860, alignment: .leading)
@@ -186,6 +176,8 @@ struct MeetingDetailView: View {
                     ForEach(people) { Chip(text: $0.name, icon: "person.fill") }
                 }
                 .padding(.top, 2)
+                .animation(Theme.springy, value: people.map(\.name))
+                .transition(.opacity)
             }
         }
     }
@@ -197,6 +189,27 @@ struct MeetingDetailView: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .frame(maxWidth: 280, alignment: .leading)
+    }
+
+    /// Summary | Transcript panes — each fades as the tab switches (no hard cut).
+    @ViewBuilder private var tabContent: some View {
+        switch tab {
+        case .summary:
+            summaryTab.transition(.opacity)
+        case .transcript:
+            if isNotes {
+                // A Gemini call's "transcript" is Google's full notes (no verbatim transcript).
+                GeminiNotesView(lines: noteLines, title: meeting?.title,
+                                highlight: findText, citedSnippet: citedNoteSnippet)
+                    .transition(.opacity)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(groups) { turn($0).id($0.id) }
+                }
+                .animation(Theme.springy, value: groups.map(\.id))
+                .transition(.opacity)
+            }
+        }
     }
 
     // MARK: - Summary tab
@@ -218,6 +231,7 @@ struct MeetingDetailView: View {
                 Label("Action items", systemImage: "checklist").font(.headline)
                 ForEach(tasks) { actionRow($0) }
             }
+            .animation(Theme.springy, value: tasks)
         }
     }
 
@@ -225,6 +239,7 @@ struct MeetingDetailView: View {
         Button { toggleTask(item) } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: item.status == .done ? "checkmark.circle.fill" : "circle")
+                    .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(item.status == .done ? Theme.accent : Color.secondary)
                     .font(.title3)
                 VStack(alignment: .leading, spacing: 2) {
@@ -249,20 +264,26 @@ struct MeetingDetailView: View {
                 Spacer()
                 summaryStatusLabel
             }
-            if let s = meeting?.callSummary, !s.isEmpty {
-                MarkdownAnswerView(text: s)
-            } else if isSummarizing {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Summarizing locally…").foregroundStyle(.secondary)
+            Group {
+                if let s = meeting?.callSummary, !s.isEmpty {
+                    MarkdownAnswerView(text: s).transition(.opacity)
+                } else if isSummarizing {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Summarizing locally…").foregroundStyle(.secondary)
+                    }
+                    .transition(.opacity)
+                } else {
+                    Text(autoPaused
+                         ? "Summary paused to save battery — generate it now below."
+                         : (isNotes ? "Summarizing Google's notes… (full notes are on the Transcript tab)"
+                                    : "No summary yet — generate one below."))
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
                 }
-            } else {
-                Text(autoPaused
-                     ? "Summary paused to save battery — generate it now below."
-                     : (isNotes ? "Summarizing Google's notes… (full notes are on the Transcript tab)"
-                                : "No summary yet — generate one below."))
-                    .foregroundStyle(.secondary)
             }
+            .animation(Theme.smooth, value: meeting?.callSummary)
+            .animation(Theme.smooth, value: isSummarizing)
             regenerateBar
         }
     }
@@ -301,7 +322,9 @@ struct MeetingDetailView: View {
         // Only reflect the toggle in the UI if the row actually changed; otherwise reload so the checklist
         // never lies about a task that was deleted/reconciled away.
         if (try? env.store.setTaskStatus(id: item.id, next)) == true {
-            if let i = tasks.firstIndex(where: { $0.id == item.id }) { tasks[i].status = next }
+            withAnimation(Theme.springy) {
+                if let i = tasks.firstIndex(where: { $0.id == item.id }) { tasks[i].status = next }
+            }
             env.refreshReminders()
         } else {
             Task { await reloadMeta() }
@@ -320,8 +343,12 @@ struct MeetingDetailView: View {
     /// Refresh just the meeting row + tasks (after a summary/regenerate lands) without rebuilding the
     /// transcript groups.
     private func reloadMeta() async {
-        if let m = try? env.store.meeting(id: meetingID) { meeting = m }
-        tasks = (try? env.store.tasks(meetingID: meetingID)) ?? []
+        let m = try? env.store.meeting(id: meetingID)
+        let t = (try? env.store.tasks(meetingID: meetingID)) ?? []
+        withAnimation(Theme.springy) {   // title/category/summary settle in, not pop
+            if let m { meeting = m }
+            tasks = t
+        }
     }
 
     private func turn(_ g: TurnGroup) -> some View {

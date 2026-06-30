@@ -28,7 +28,9 @@ struct DuplicateReviewView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 14) {
-                        ForEach(suggestions) { s in card(s) }
+                        ForEach(suggestions) { s in
+                            card(s).transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        }
                     }
                     .padding()
                 }
@@ -97,7 +99,8 @@ struct DuplicateReviewView: View {
     private func reload() {
         let dismissed = Set(UserDefaults.standard.stringArray(forKey: Self.dismissedKey) ?? [])
         let metas = (try? env.store.meetingMetas()) ?? []
-        suggestions = DuplicateDetector.suggestions(metas).filter { !dismissed.contains($0.id) }
+        let next = DuplicateDetector.suggestions(metas).filter { !dismissed.contains($0.id) }
+        withAnimation(Theme.springy) { suggestions = next }
     }
 
     private func dismissPair(_ s: DuplicateSuggestion) {

@@ -41,9 +41,11 @@ struct MeetingsView: View {
                                            description: Text("Import a transcript to get started."))
                 } else {
                     VStack(spacing: 0) {
-                        if dupCount > 0 { dupBanner }
+                        if dupCount > 0 {
+                            dupBanner.transition(.move(edge: .top).combined(with: .opacity))
+                        }
                         List(filtered) { m in
-                            NavigationLink(value: m.id) { row(m) }
+                            NavigationLink(value: m.id) { row(m).cbHoverRow() }
                                 .contextMenu {
                                     Menu {
                                         ForEach(CallCategory.allCases, id: \.self) { c in
@@ -65,6 +67,8 @@ struct MeetingsView: View {
                         .navigationDestination(for: String.self) { id in
                             MeetingWorkspaceView(meetingID: id)
                         }
+                        .animation(Theme.springy, value: categoryFilter)
+                        .animation(Theme.springy, value: query)
                     }
                 }
             }
@@ -133,8 +137,11 @@ struct MeetingsView: View {
     }
 
     private func reload() {
-        meetings = env.recentMeetings()
-        dupCount = DuplicateScan.count(env.store)
+        // Animate so AI titles/categories/summaries settle in (rows reorder, pills fade) instead of popping.
+        withAnimation(Theme.springy) {
+            meetings = env.recentMeetings()
+            dupCount = DuplicateScan.count(env.store)
+        }
     }
 
     /// True when the AI gave the call a meaningful name that differs from its raw (often date-stamp) title.

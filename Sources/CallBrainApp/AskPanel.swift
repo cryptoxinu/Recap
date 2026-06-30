@@ -57,15 +57,24 @@ struct AskPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if messages.isEmpty { emptyState } else { transcript }
+            Group {
+                if messages.isEmpty {
+                    emptyState.transition(.opacity.combined(with: .scale(scale: 0.98)))
+                } else {
+                    transcript.transition(.opacity)
+                }
+            }
+            .animation(.smooth(duration: 0.3), value: messages.isEmpty)
             if model.saveFailed {
                 Label("Couldn't save this chat — check disk space or relaunch.", systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, compact ? 14 : 18).padding(.top, 4)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             inputBar
         }
+        .animation(.smooth, value: model.saveFailed)
         .sheet(item: $sheet) { ref in
             NavigationStack {
                 MeetingDetailView(meetingID: ref.id, highlightChunkID: ref.chunkID)
@@ -139,15 +148,16 @@ struct AskPanel: View {
                     .textFieldStyle(.plain).lineLimit(1...5)
                     .onSubmit { ask(query) }
                     .disabled(busy)
-                if busy {
-                    Button { model.stop() } label: { Image(systemName: "stop.circle.fill").font(.title) }
-                        .buttonStyle(.plain).foregroundStyle(.red)
-                        .help("Stop generating")
-                } else {
-                    Button { ask(query) } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
-                        .buttonStyle(.plain).foregroundStyle(Theme.accent)
-                        .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button { busy ? model.stop() : ask(query) } label: {
+                    Image(systemName: busy ? "stop.circle.fill" : "arrow.up.circle.fill")
+                        .font(.title)
+                        .contentTransition(.symbolEffect(.replace))
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(busy ? .red : Theme.accent)
+                .disabled(!busy && query.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help(busy ? "Stop generating" : "Ask")
+                .animation(Theme.smooth, value: busy)
             }
             if showsResearchToggle {
                 HStack(spacing: 8) {
@@ -158,6 +168,7 @@ struct AskPanel: View {
                         }
                         .font(.caption.weight(.medium))
                         .foregroundStyle(researchMode ? .white : .secondary)
+                        .animation(Theme.smooth, value: researchMode)
                         .padding(.horizontal, 9).padding(.vertical, 5)
                         .background(Capsule().fill(researchMode ? Theme.accent : Theme.cardFill))
                         .overlay(Capsule().strokeBorder(researchMode ? .clear : Theme.hairline))
@@ -193,15 +204,21 @@ struct AskMessageView: View {
                 }
                 Spacer()
             }
-            if message.pending {
-                ReasoningTimeline(steps: message.steps)
-            } else if message.role == .assistant {
-                if !message.steps.isEmpty { ReasoningDisclosure(steps: message.steps) }
-                MarkdownAnswerView(text: message.text, citations: message.citations, onTapCite: onTapCite)
-                    .textSelection(.enabled)
-            } else {
-                Text(message.text).textSelection(.enabled)
+            Group {
+                if message.pending {
+                    ReasoningTimeline(steps: message.steps).transition(.opacity)
+                } else if message.role == .assistant {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !message.steps.isEmpty { ReasoningDisclosure(steps: message.steps) }
+                        MarkdownAnswerView(text: message.text, citations: message.citations, onTapCite: onTapCite)
+                            .textSelection(.enabled)
+                    }
+                    .transition(.opacity)
+                } else {
+                    Text(message.text).textSelection(.enabled)
+                }
             }
+            .animation(.smooth(duration: 0.3), value: message.pending)
             if !message.citations.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     Button { withAnimation(.snappy) { sourcesExpanded.toggle() } } label: {

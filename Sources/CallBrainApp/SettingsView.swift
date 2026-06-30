@@ -90,6 +90,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .animation(Theme.smooth, value: env.fathom.connected)
+        .animation(Theme.smooth, value: env.drive.connected)
+        .animation(Theme.smooth, value: env.autoImport.folderPath)
         .navigationTitle("Settings")
         .onAppear {
             primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled
