@@ -97,6 +97,7 @@ final class ImportCoordinator {
         while let job = (try? env.store.pendingImportJobs())?.first(where: { $0.state == .queued }) {
             await run(job)
         }
+        env.refreshReminders()   // new imports can add tasks → keep the reminder count fresh
     }
 
     private func run(_ job: ImportJob) async {

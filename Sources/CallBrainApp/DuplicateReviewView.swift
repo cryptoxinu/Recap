@@ -38,12 +38,13 @@ struct DuplicateReviewView: View {
         .task { reload() }
         .alert("Delete this call?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button("Delete", role: .destructive) {
-                if let d = confirmDelete { try? env.store.deleteMeeting(id: d.id); reload() }
+                if let d = confirmDelete { try? env.store.deleteMeeting(id: d.id); reload(); env.refreshReminders() }
                 confirmDelete = nil
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
         } message: {
-            Text("“\(confirmDelete?.title ?? "")” will be removed, including its transcript and tasks. This can't be undone.")
+            Text("“\(confirmDelete?.title ?? "")” will be removed — its transcript/notes, tasks, this call's "
+                 + "chats, and any saved excerpts in other chats. This can't be undone.")
         }
     }
 

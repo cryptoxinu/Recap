@@ -432,9 +432,30 @@ public final class Store: @unchecked Sendable {
         }
     }
 
-    /// Delete a meeting (cascades chunks/embeddings/utterances/entities/tasks) — Duplicate Review action.
+    /// Fully delete a meeting and everything that could still hold its content (Codex P6 gate HIGH: the
+    /// "transcript removed" promise must be true). Cascades chunks/embeddings/utterances/entities/tasks;
+    /// deletes the meeting's own AskFred conversations (→ their messages); and SCRUBS stored citation
+    /// excerpts referencing this meeting from any remaining (global) chat message.
     public func deleteMeeting(id: String) throws {
-        try dbQueue.write { db in try db.execute(sql: "DELETE FROM meetings WHERE id = ?", arguments: [id]) }
+        try dbQueue.write { db in
+            // 1) The meeting's own chats (meeting-scoped) → cascade their messages.
+            try db.execute(sql: "DELETE FROM conversations WHERE meeting_id = ?", arguments: [id])
+            // 2) Scrub citation snippets referencing this meeting from remaining messages.
+            let rows = try Row.fetchAll(db, sql:
+                "SELECT id, citations_json FROM messages WHERE citations_json LIKE ?",
+                arguments: ["%\(id)%"])
+            for r in rows {
+                guard let json = r["citations_json"] as String?, let data = json.data(using: .utf8),
+                      let cites = try? JSONDecoder().decode([StoredCitation].self, from: data) else { continue }
+                let kept = cites.filter { $0.meetingID != id }
+                guard kept.count != cites.count else { continue }
+                let newJSON = (try? JSONEncoder().encode(kept)).flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+                try db.execute(sql: "UPDATE messages SET citations_json = ? WHERE id = ?",
+                               arguments: [newJSON, r["id"] as String])
+            }
+            // 3) The meeting itself → cascade chunks/embeddings/utterances/entities/tasks.
+            try db.execute(sql: "DELETE FROM meetings WHERE id = ?", arguments: [id])
+        }
     }
 
     /// Top entities across the whole library (for an overview / filter chips).

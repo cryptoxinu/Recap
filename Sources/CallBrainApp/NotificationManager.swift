@@ -21,6 +21,9 @@ enum NotificationManager {
         if on {
             let granted = (try? await UNUserNotificationCenter.current()
                 .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
+            // Re-check the desired state after the await (the user may have toggled off, or auth was
+            // denied) before scheduling — avoids a UI/defaults/pending-request desync (P6 gate LOW).
+            guard isEnabled else { cancel(); return }
             if granted { scheduleDailyReminder(openTaskCount: openTaskCount) }
             else { UserDefaults.standard.set(false, forKey: enabledKey) }
         } else {

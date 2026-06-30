@@ -52,6 +52,32 @@ struct ConversationStoreTests {
         #expect(try store.messages(conversationID: "c").map(\.id) == ["m1", "m2"])   // preserved
     }
 
+    @Test("deleteMeeting removes its chats AND scrubs its citation excerpts from other chats (gate HIGH)")
+    func deleteMeetingScrubs() throws {
+        let store = try freshStore()
+        // a meeting with a chunk
+        try store.saveMeeting(Meeting(id: "mt", title: "Sensitive call", date: "2026-06-29", source: .fireflies),
+                              chunks: [Store.ChunkInput(chunkID: "mt_c0", meetingID: "mt", version: 0, seq: 0,
+                                       speaker: "Max", tStart: 0, tEnd: 1, text: "secret roadmap details", contentHash: "h")])
+        // a meeting-scoped chat + a global chat that cites the meeting
+        try store.upsertConversation(Conversation(id: "cmtg", title: "AskFred", meetingID: "mt", createdAt: 1, updatedAt: 1))
+        try store.appendMessage(Message(id: "m1", conversationID: "cmtg", role: .user, text: "what?", createdAt: 2))
+        try store.upsertConversation(Conversation(id: "cglob", title: "global", createdAt: 1, updatedAt: 1))
+        try store.appendMessage(Message(id: "m2", conversationID: "cglob", role: .assistant, text: "Per the call [S1].",
+                                        citations: [StoredCitation(tag: "S1", chunkID: "mt_c0", meetingID: "mt",
+                                                                   speaker: "Max", text: "secret roadmap details")], createdAt: 3))
+
+        try store.deleteMeeting(id: "mt")
+
+        #expect(try store.meeting(id: "mt") == nil)
+        #expect(try store.conversation(id: "cmtg") == nil)              // meeting chat gone
+        #expect(try store.messages(conversationID: "cmtg").isEmpty)     // its messages cascaded
+        // global chat survives but its excerpt referencing the deleted call is scrubbed
+        let glob = try store.messages(conversationID: "cglob")
+        #expect(glob.count == 1)
+        #expect(glob[0].citations.isEmpty)                              // no leaked transcript excerpt
+    }
+
     @Test("rename + delete (messages cascade)")
     func renameDelete() throws {
         let store = try freshStore()

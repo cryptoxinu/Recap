@@ -92,6 +92,7 @@ struct TasksView: View {
         let next: ActionItem.Status = row.item.status == .open ? .done : .open
         try? env.store.setTaskStatus(id: row.item.id, next)
         load()
+        env.refreshReminders()   // keep the daily reminder count fresh
     }
 }
 

@@ -40,6 +40,32 @@ struct DuplicateDetectorTests {
         #expect(DuplicateDetector.suggestions(metas).isEmpty)
     }
 
+    @Test("a single shared person (two different same-day 1:1s) is NOT flagged (gate MED)")
+    func singleSharedPersonNotFlagged() {
+        let metas = [
+            m("a", "Render pricing sync", "2026-06-29", "fireflies", ["Travis", "Zade"]),
+            m("b", "Validator economics review", "2026-06-29", "fathom", ["Travis", "Max"]),  // only Travis shared
+        ]
+        // shared = 1 (< 2) → not strong-people; titles distinct → not flagged
+        #expect(DuplicateDetector.suggestions(metas).isEmpty)
+    }
+
+    @Test("two same-day generic 'Untitled meeting' imports are NOT flagged on title (gate MED)")
+    func genericTitlesNotFlagged() {
+        let metas = [
+            m("a", "Untitled meeting", "2026-06-29", "paste", []),
+            m("b", "Untitled meeting", "2026-06-29", "paste", []),
+        ]
+        #expect(DuplicateDetector.suggestions(metas).isEmpty)
+    }
+
+    @Test("suggestion id is order-independent (gate LOW)")
+    func orderIndependentID() {
+        let s1 = DuplicateSuggestion(a: m("a", "x", "d", "s", []), b: m("b", "x", "d", "s", []), score: 1, reason: "")
+        let s2 = DuplicateSuggestion(a: m("b", "x", "d", "s", []), b: m("a", "x", "d", "s", []), score: 1, reason: "")
+        #expect(s1.id == s2.id)
+    }
+
     @Test("jaccard + titleJaccard math")
     func math() {
         #expect(DuplicateDetector.jaccard(Set(["a", "b"]), Set(["a", "b"])) == 1.0)

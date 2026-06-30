@@ -21,13 +21,20 @@ public struct DuplicateSuggestion: Sendable, Equatable, Identifiable {
     public let b: MeetingMeta
     public let score: Double
     public let reason: String
-    public var id: String { a.id + "|" + b.id }
+    /// Order-independent (Codex P6 gate LOW): a dismissal of A|B must not re-appear as B|A after a
+    /// non-deterministic same-date re-ordering.
+    public var id: String { [a.id, b.id].sorted().joined(separator: "|") }
 }
 
 public enum DuplicateDetector {
-    /// Suggest near-duplicate pairs. Both meetings must share a DATE; then a strong people-overlap or a
-    /// strong title-overlap flags the pair. Conservative thresholds keep false positives low.
-    public static func suggestions(_ meetings: [MeetingMeta], threshold: Double = 0.5) -> [DuplicateSuggestion] {
+    /// Generic auto-titles carry no identity → never match two meetings on title alone.
+    static let genericTitles: Set<String> = ["untitled meeting", "imported call", "recorded meeting", "recorded call"]
+
+    /// Suggest near-duplicate pairs. Both meetings share a DATE; then we need a *strong* signal — a real
+    /// people overlap (≥2 shared, high Jaccard) OR a strong non-generic title match. A single shared 1:1
+    /// person, or two same-day "Untitled" imports, are NOT flagged (Codex P6 gate MED — false positives
+    /// paired with an irreversible delete are unsafe).
+    public static func suggestions(_ meetings: [MeetingMeta]) -> [DuplicateSuggestion] {
         var byDate: [String: [MeetingMeta]] = [:]
         for m in meetings { byDate[m.date, default: []].append(m) }
 
@@ -36,23 +43,32 @@ public enum DuplicateDetector {
             for i in 0..<group.count {
                 for j in (i + 1)..<group.count {
                     let a = group[i], b = group[j]
+                    let shared = a.people.intersection(b.people).count
                     let people = jaccard(a.people, b.people)
-                    let title = titleJaccard(a.title, b.title)
+                    let title = genericPair(a.title, b.title) ? 0 : titleJaccard(a.title, b.title)
+
+                    let strongPeople = shared >= 2 && people >= 0.6
+                    let crossSourceSameCall = a.source != b.source && shared >= 2 && people >= 0.5
+                    let strongTitle = title >= 0.6
+                    guard strongPeople || crossSourceSameCall || strongTitle else { continue }
+
                     let score = max(people, title)
-                    guard score >= threshold else { continue }
                     out.append(DuplicateSuggestion(a: a, b: b, score: score,
-                                                   reason: reason(a, b, people: people, title: title)))
+                        reason: reason(a, b, crossSource: crossSourceSameCall, strongTitle: strongTitle)))
                 }
             }
         }
         return out.sorted { $0.score > $1.score }
     }
 
-    static func reason(_ a: MeetingMeta, _ b: MeetingMeta, people: Double, title: Double) -> String {
-        if a.source != b.source && people >= 0.5 {
-            return "Looks like the same call captured from \(label(a.source)) and \(label(b.source))."
-        }
-        if title >= 0.6 { return "Very similar titles on \(a.date)." }
+    private static func genericPair(_ a: String, _ b: String) -> Bool {
+        genericTitles.contains(a.lowercased().trimmingCharacters(in: .whitespaces))
+            || genericTitles.contains(b.lowercased().trimmingCharacters(in: .whitespaces))
+    }
+
+    static func reason(_ a: MeetingMeta, _ b: MeetingMeta, crossSource: Bool, strongTitle: Bool) -> String {
+        if crossSource { return "Looks like the same call captured from \(label(a.source)) and \(label(b.source))." }
+        if strongTitle { return "Very similar titles on \(a.date)." }
         return "Same day, mostly the same people."
     }
 

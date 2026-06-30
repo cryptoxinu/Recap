@@ -83,4 +83,8 @@ final class AppEnvironment {
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }
     func openTaskCount() -> Int { (try? store.openTaskCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }
+
+    /// Re-arm the daily reminder with the current open-task count — call whenever tasks change (completed,
+    /// imported, or a meeting deleted) so a scheduled notification never fires a stale count (P6 gate MED).
+    func refreshReminders() { NotificationManager.refresh(openTaskCount: openTaskCount()) }
 }
