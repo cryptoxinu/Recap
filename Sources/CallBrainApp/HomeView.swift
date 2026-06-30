@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var meetings: [Store.MeetingRow] = []
     @State private var chat = ChatModel()
+    @State private var openMeetingID: String?
 
     private var greeting: String {
         switch Calendar.current.component(.hour, from: Date()) {
@@ -21,7 +22,15 @@ struct HomeView: View {
             askColumn
         }
         .navigationTitle("Home")
-        .task { meetings = env.recentMeetings() }
+        .task { meetings = env.recentMeetings(); env.backfillTitleIntelligence() }
+        .onChange(of: env.titlesRevision) { meetings = env.recentMeetings() }   // live-refresh as AI titles land
+        .sheet(item: $openMeetingID) { id in
+            NavigationStack {
+                MeetingWorkspaceView(meetingID: id)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { openMeetingID = nil } } }
+            }
+            .frame(minWidth: 1000, minHeight: 680)
+        }
     }
 
     private var mainColumn: some View {
@@ -55,15 +64,8 @@ struct HomeView: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(meetings.prefix(12)) { m in
-                            HStack(spacing: 10) {
-                                Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(m.title).bold().lineLimit(1)
-                                    Text("\(m.date) · \(m.source)").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 8)
+                            Button { openMeetingID = m.id } label: { recentRow(m) }
+                                .buttonStyle(.plain)
                             if m.id != meetings.prefix(12).last?.id { Divider() }
                         }
                     }
@@ -85,6 +87,33 @@ struct HomeView: View {
         }
         .frame(width: 372)
         .background(Theme.cardFill.opacity(0.35))
+    }
+
+    /// One recent-call row: the proper (AI) name, a one-line intelligence summary under it, then date·source.
+    private func recentRow(_ m: Store.MeetingRow) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.displayTitle).bold().lineLimit(1)
+                if let s = m.aiSummary, !s.isEmpty {
+                    Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text("\(m.date) · \(sourceLabel(m.source))").font(.caption2).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    private func sourceLabel(_ s: String) -> String {
+        switch s {
+        case "gmeet_gemini": "Google Meet (Gemini notes)"
+        case "gmeet_local", "gmeet_cloud": "Google Meet"
+        case "fireflies": "Fireflies"; case "fathom": "Fathom"; case "cluely": "Cluely"
+        case "paste": "Pasted"; default: s
+        }
     }
 
     private func statCard(_ title: String, _ value: String, _ icon: String, _ tint: Color) -> some View {

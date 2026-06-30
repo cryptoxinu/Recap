@@ -152,6 +152,7 @@ final class ImportCoordinator {
                 j.state = .done
                 j.message = nil
             }
+            if !outcome.deduped { env.generateTitleIntelligence(for: outcome.meetingID) }   // proper AI title + summary
             _ = persist(j)
         } catch {
             j.state = .failed
@@ -183,6 +184,7 @@ final class ImportCoordinator {
         j.message = outcome.deduped
             ? "Already imported — this recording matches a call in your library."
             : "Transcribed \(out.transcript.utterances.count) turns\(speakerNote)."
+        if !outcome.deduped { env.generateTitleIntelligence(for: outcome.meetingID) }   // proper AI title + summary
     }
 
     /// Live progress for a transcribing job — updates the DISPLAY list in memory (not persisted per tick).

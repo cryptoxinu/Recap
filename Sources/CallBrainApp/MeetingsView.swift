@@ -56,6 +56,7 @@ struct MeetingsView: View {
             reload()
             if ProcessInfo.processInfo.environment["CALLBRAIN_DUPREVIEW"] == "1" { showDupReview = true }
         }
+        .onChange(of: env.titlesRevision) { reload() }   // live-refresh as AI titles land
         .sheet(isPresented: $showDupReview, onDismiss: reload) { DuplicateReviewView() }
         .confirmationDialog(
             pendingDelete.map { "Delete “\($0.title)”?" } ?? "Delete call?",
@@ -106,8 +107,11 @@ struct MeetingsView: View {
         HStack(spacing: 10) {
             Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent).font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text(m.title).bold().lineLimit(1)
-                Text("\(m.date) · \(m.source)").font(.caption).foregroundStyle(.secondary)
+                Text(m.displayTitle).bold().lineLimit(1)
+                if let s = m.aiSummary, !s.isEmpty {
+                    Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text("\(m.date) · \(m.source)").font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
         }

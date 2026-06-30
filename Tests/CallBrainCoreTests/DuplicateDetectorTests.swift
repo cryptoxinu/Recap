@@ -22,6 +22,23 @@ struct DuplicateDetectorTests {
         #expect(s[0].reason.contains("same call"))
     }
 
+    @Test("same call across sources still flagged when one tool uses full names, the other first names")
+    func crossSourceNameFormats() {
+        // Google records full names; Fathom logs first names of the SAME call → must still match.
+        let metas = [
+            m("g", "Standup", "2026-06-29", "gmeet_gemini", ["Maxwell Lang", "Travis Good", "Zade Kal"]),
+            m("f", "standup", "2026-06-29", "fathom", ["Max", "Travis", "Zade"]),   // wait: Max≠Maxwell first-token
+        ]
+        // first-name tokens: {maxwell,travis,zade} vs {max,travis,zade} → travis+zade shared (2) → flagged cross-source
+        let s = DuplicateDetector.suggestions(metas)
+        #expect(s.count == 1 && Set([s[0].a.id, s[0].b.id]) == ["g", "f"])
+    }
+
+    @Test("firstNames normalizes to the first token, lowercased")
+    func firstNames() {
+        #expect(DuplicateDetector.firstNames(["Zade Kal", "Travis Good"]) == ["zade", "travis"])
+    }
+
     @Test("different dates are never flagged")
     func differentDates() {
         let metas = [

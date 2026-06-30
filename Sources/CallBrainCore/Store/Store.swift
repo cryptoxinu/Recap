@@ -182,6 +182,21 @@ public final class Store: @unchecked Sendable {
                 """)
             try db.execute(sql: "CREATE INDEX ix_msg_conv ON messages(conversation_id, created_at);")
         }
+        m.registerMigration("v8_meeting_intelligence") { db in
+            // Purge any legacy ORPHANED rows (left by an old non-cascading delete) so the migrator's
+            // foreign-key check can't refuse to open the database (founder bug 2026-06-30). Runtime deletes
+            // cascade (FKs are ON); this only cleans pre-existing rot. Order matters — clean each table
+            // before the ones that reference IT (chunks → embeddings; conversations → messages).
+            for child in ["utterances", "transcript_chunks", "tasks", "meeting_entities"] {
+                try db.execute(sql: "DELETE FROM \(child) WHERE meeting_id NOT IN (SELECT id FROM meetings)")
+            }
+            try db.execute(sql: "DELETE FROM embeddings WHERE chunk_id NOT IN (SELECT chunk_id FROM transcript_chunks)")
+            try db.execute(sql: "DELETE FROM conversations WHERE meeting_id IS NOT NULL AND meeting_id NOT IN (SELECT id FROM meetings)")
+            try db.execute(sql: "DELETE FROM messages WHERE conversation_id NOT IN (SELECT id FROM conversations)")
+            // AI-generated "proper" title + a one-line intelligence summary, shown under the call name.
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN ai_title TEXT;")
+            try db.execute(sql: "ALTER TABLE meetings ADD COLUMN ai_summary TEXT;")
+        }
         return m
     }()
 
@@ -381,6 +396,28 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// Reword / re-attribute a task (AI task reconciliation).
+    public func updateTaskText(id: String, text: String, owner: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE tasks SET text = ?, owner = ? WHERE id = ?", arguments: [text, owner, id])
+        }
+    }
+
+    /// Add a task the AI reconciliation surfaced from a call (attributed to that meeting; FK-checked by the
+    /// caller). `INSERT OR IGNORE` on the (meeting_id, dedupe_key) UNIQUE avoids re-adding the same one.
+    @discardableResult
+    public func addReconciledTask(meetingID: String, owner: String?, text: String) throws -> Bool {
+        let id = "task_" + UUID().uuidString
+        let key = "ai:" + text.lowercased().trimmingCharacters(in: .whitespaces).prefix(120)
+        return try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO tasks (id, meeting_id, owner, text, status, dedupe_key, created_at)
+                VALUES (?, ?, ?, ?, 'open', ?, strftime('%s','now'))
+                """, arguments: [id, meetingID, owner, text, String(key)])
+            return db.changesCount > 0
+        }
+    }
+
     public func openTaskCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM tasks WHERE status='open'") ?? 0 }
     }
@@ -570,16 +607,30 @@ public final class Store: @unchecked Sendable {
         public let title: String
         public let date: String
         public let source: String
+        public var aiTitle: String? = nil
+        public var aiSummary: String? = nil
+        /// The proper AI title if we have one, else the original (filename-derived) title.
+        public var displayTitle: String { (aiTitle?.isEmpty == false) ? aiTitle! : title }
+        static func from(_ r: Row) -> MeetingRow {
+            MeetingRow(id: r["id"], title: r["title"], date: r["date"], source: r["source"],
+                       aiTitle: r["ai_title"], aiSummary: r["ai_summary"])
+        }
     }
 
     public func recentMeetings(limit: Int = 200) throws -> [MeetingRow] {
         try dbQueue.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, title, date, source FROM meetings
+                SELECT id, title, date, source, ai_title, ai_summary FROM meetings
                 ORDER BY date_epoch DESC, created_at DESC LIMIT ?
-                """, arguments: [limit]).map {
-                    MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"])
-                }
+                """, arguments: [limit]).map(MeetingRow.from)
+        }
+    }
+
+    /// Persist the AI-generated title + one-line summary for a call (meeting-title intelligence).
+    public func setMeetingIntelligence(id: String, aiTitle: String?, aiSummary: String?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE meetings SET ai_title = ?, ai_summary = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S','now') WHERE id = ?",
+                           arguments: [aiTitle, aiSummary, id])
         }
     }
 
@@ -629,8 +680,8 @@ public final class Store: @unchecked Sendable {
 
     public func meeting(id: String) throws -> MeetingRow? {
         try dbQueue.read { db in
-            try Row.fetchOne(db, sql: "SELECT id, title, date, source FROM meetings WHERE id = ?", arguments: [id])
-                .map { MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"]) }
+            try Row.fetchOne(db, sql: "SELECT id, title, date, source, ai_title, ai_summary FROM meetings WHERE id = ?", arguments: [id])
+                .map(MeetingRow.from)
         }
     }
 

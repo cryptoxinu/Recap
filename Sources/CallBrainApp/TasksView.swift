@@ -8,19 +8,38 @@ struct TasksView: View {
     @State private var rows: [Store.TaskRow] = []
     @State private var filter: Filter = .open
     @State private var openMeetingID: String?
+    @State private var tidying = false
+    @State private var tidySummary: String?
 
     enum Filter: String, CaseIterable, Identifiable { case open = "Open", done = "Done", all = "All"; var id: String { rawValue } }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
+                HStack(spacing: 10) {
                     Text("Tasks").font(.title2).bold()
                     Spacer()
+                    Button { tidy() } label: {
+                        HStack(spacing: 5) {
+                            if tidying { ProgressView().controlSize(.small) }
+                            else { Image(systemName: "sparkles") }
+                            Text(tidying ? "Tidying…" : "Tidy with AI")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent)
+                    .disabled(tidying)
+                    .help("Look across every call: reword tasks, mark done ones complete, merge duplicates, and add anything missing.")
                     Picker("", selection: $filter) {
                         ForEach(Filter.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented).fixedSize()
+                }
+                if let s = tidySummary {
+                    Label(s, systemImage: "checkmark.seal.fill")
+                        .font(.callout).foregroundStyle(Theme.accent)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(0.1)))
                 }
                 if rows.isEmpty {
                     emptyState
@@ -86,6 +105,30 @@ struct TasksView: View {
     private func load() {
         let status: ActionItem.Status? = filter == .all ? nil : (filter == .open ? .open : .done)
         rows = (try? env.store.tasks(status: status)) ?? []
+    }
+
+    private func tidy() {
+        guard !tidying else { return }
+        tidying = true; tidySummary = nil
+        Task {
+            let result = await env.reconcileTasks()
+            tidying = false
+            load()
+            if let r = result {
+                if r.reworded + r.completed + r.deduped + r.added == 0 {
+                    tidySummary = "Your task list is already tidy — nothing to change."
+                } else {
+                    var parts: [String] = []
+                    if r.reworded > 0 { parts.append("reworded \(r.reworded)") }
+                    if r.added > 0 { parts.append("added \(r.added)") }
+                    if r.completed > 0 { parts.append("marked \(r.completed) done") }
+                    if r.deduped > 0 { parts.append("merged \(r.deduped) duplicate\(r.deduped == 1 ? "" : "s")") }
+                    tidySummary = "Tidied: " + parts.joined(separator: " · ") + "."
+                }
+            } else {
+                tidySummary = "Couldn't reach the AI to tidy tasks — try again."
+            }
+        }
     }
 
     private func toggle(_ row: Store.TaskRow) {

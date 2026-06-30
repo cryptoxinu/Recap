@@ -104,6 +104,64 @@ final class AppEnvironment {
     func openTaskCount() -> Int { (try? store.openTaskCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }
 
+    /// Bumps when a call's AI title/summary lands, so meeting lists can live-refresh.
+    var titlesRevision = 0
+
+    /// Generate (or refresh) the AI title + one-line summary for a call from its content, then persist it.
+    func generateTitleIntelligence(for meetingID: String, force: Bool = false) {
+        Task { [weak self] in
+            guard let self, let m = try? self.store.meeting(id: meetingID) else { return }
+            if !force, m.aiTitle?.isEmpty == false { return }
+            let utts = (try? self.store.utterances(meetingID: meetingID)) ?? []
+            let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+            guard let r = await TitleIntelligence(llm: self.router).generate(from: text, fallbackTitle: m.title) else { return }
+            try? self.store.setMeetingIntelligence(id: meetingID, aiTitle: r.title, aiSummary: r.summary)
+            self.titlesRevision &+= 1
+        }
+    }
+
+    /// On launch, fill in titles for any calls that don't have one yet (e.g. imported before this feature).
+    func backfillTitleIntelligence() {
+        for m in recentMeetings() where (m.aiTitle?.isEmpty ?? true) {
+            generateTitleIntelligence(for: m.id)
+        }
+    }
+
+    struct ReconcileSummary: Sendable { let reworded: Int; let completed: Int; let deduped: Int; let added: Int }
+
+    /// "Tidy with AI" — reconcile the whole task list against every call: reword for clarity, mark ones the
+    /// calls show are done, merge duplicates, add missed tasks. Safe: completion/dedup mark Done
+    /// (reversible), additions are FK-checked to a real call, nothing is hard-deleted.
+    func reconcileTasks() async -> ReconcileSummary? {
+        let openRows = (try? store.tasks(status: .open)) ?? []
+        let ctx = openRows.map {
+            TaskIntelligence.TaskContext(id: $0.item.id, owner: $0.item.owner, text: $0.item.text, meeting: $0.meetingTitle)
+        }
+        let meetings = recentMeetings()
+        let validIDs = Set(meetings.map(\.id))
+        var evidence = ""
+        for m in meetings.prefix(20) {
+            let utts = (try? store.utterances(meetingID: m.id)) ?? []
+            let body = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+            evidence += "## CALL meetingID=\(m.id) — \(m.displayTitle) (\(m.date))\n" + String(body.prefix(2500)) + "\n\n"
+            if evidence.count > 14000 { break }
+        }
+        guard let plan = await TaskIntelligence(llm: router).reconcile(tasks: ctx, evidence: evidence) else { return nil }
+
+        var rew = 0, comp = 0, dedup = 0, added = 0
+        let openIDs = Set(openRows.map(\.item.id))
+        for u in plan.reword where openIDs.contains(u.id) {
+            try? store.updateTaskText(id: u.id, text: u.text, owner: u.owner); rew += 1
+        }
+        for id in Set(plan.complete) where openIDs.contains(id) { try? store.setTaskStatus(id: id, .done); comp += 1 }
+        for id in Set(plan.duplicates) where openIDs.contains(id) { try? store.setTaskStatus(id: id, .done); dedup += 1 }
+        for n in plan.add where validIDs.contains(n.meetingID) {
+            if (try? store.addReconciledTask(meetingID: n.meetingID, owner: n.owner, text: n.text)) == true { added += 1 }
+        }
+        refreshReminders()
+        return ReconcileSummary(reworded: rew, completed: comp, deduped: dedup, added: added)
+    }
+
     /// Delete a call and everything derived from it (chunks/embeddings/utterances/entities/tasks +
     /// meeting-scoped chats, with citations to it scrubbed from other chats). Refreshes the reminder
     /// since open-task counts may change. Returns false on failure (surfaced in the UI).

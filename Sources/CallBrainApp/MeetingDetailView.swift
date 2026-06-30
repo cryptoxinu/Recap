@@ -85,7 +85,7 @@ struct MeetingDetailView: View {
                 Task { recomputeHighlight(); await scrollToHighlight(proxy) }
             }
         }
-        .navigationTitle(meeting?.title ?? "Meeting")
+        .navigationTitle(meeting?.displayTitle ?? "Meeting")
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button { withAnimation(.snappy) { findActive.toggle() } } label: {
@@ -139,7 +139,10 @@ struct MeetingDetailView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(meeting?.title ?? "Meeting").font(.largeTitle).bold()
+            Text(meeting?.displayTitle ?? "Meeting").font(.largeTitle).bold()
+            if let s = meeting?.aiSummary, !s.isEmpty {
+                Text(s).font(.title3).foregroundStyle(.secondary)
+            }
             if let m = meeting {
                 HStack(spacing: 14) {
                     Label(m.date, systemImage: "calendar")

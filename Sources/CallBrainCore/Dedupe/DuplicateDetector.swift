@@ -45,10 +45,18 @@ public enum DuplicateDetector {
                     let a = group[i], b = group[j]
                     let shared = a.people.intersection(b.people).count
                     let people = jaccard(a.people, b.people)
+                    // First-name-normalized overlap too, so the SAME call recorded by two tools that format
+                    // names differently ("Zade Kal" vs "Zade") still matches across sources.
+                    let aFirst = firstNames(a.people), bFirst = firstNames(b.people)
+                    let sharedFirst = aFirst.intersection(bFirst).count
+                    let peopleFirst = jaccard(aFirst, bFirst)
                     let title = genericPair(a.title, b.title) ? 0 : titleJaccard(a.title, b.title)
 
                     let strongPeople = shared >= 2 && people >= 0.6
-                    let crossSourceSameCall = a.source != b.source && shared >= 2 && people >= 0.5
+                    // Cross-source + same-day is itself a strong signal (two tools rarely record the same
+                    // day + people unless it's the same call), so the people bar is lower here.
+                    let crossSourceSameCall = a.source != b.source
+                        && max(shared, sharedFirst) >= 2 && max(people, peopleFirst) >= 0.4
                     let strongTitle = title >= 0.6
                     guard strongPeople || crossSourceSameCall || strongTitle else { continue }
 
@@ -70,6 +78,12 @@ public enum DuplicateDetector {
         if crossSource { return "Looks like the same call captured from \(label(a.source)) and \(label(b.source))." }
         if strongTitle { return "Very similar titles on \(a.date)." }
         return "Same day, mostly the same people."
+    }
+
+    /// First token of each name (lowercased) — so "Zade Kal" and "Zade" normalize to the same person when
+    /// two recording tools format names differently.
+    static func firstNames(_ people: Set<String>) -> Set<String> {
+        Set(people.compactMap { $0.split(separator: " ").first.map { String($0).lowercased() } })
     }
 
     public static func jaccard<T: Hashable>(_ a: Set<T>, _ b: Set<T>) -> Double {
