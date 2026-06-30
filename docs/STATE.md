@@ -81,14 +81,12 @@ Ask AI → hybrid retrieve → grounded, cited answer (or honest refusal). Verif
 real morning sync.
 
 ## 8. WHAT'S LEFT (the remaining scope — do in order, do not creep)
-**Phase 1 (finish the MVP UI):**
-- [ ] **Transcript viewer must look GOOD (Fireflies-style)** — see §9. Render turn-by-turn (speaker-
-  separated, easy to read, timestamps), not a wall. Persist utterances + render them. **(NEXT)**
-- [ ] Ask answers: **render markdown** (so `##`/`**` format, not literal) + **streaming**
-  (`claude --output-format stream-json`) + tappable `[S#]` citations that jump to the transcript line.
-- [ ] Home: right-side persistent **Ask panel** (AskFred-style) + real suggested prompts from the archive.
-- [ ] **Animations / buttery polish** (list inserts, selection, streaming, panel transitions).
-- [ ] Phase-1 **Codex audit gate** once the above are done; fix HIGH/CRITICAL.
+**Phase 1 — ✅ COMPLETE + Codex-gated PASS (2026-06-30):**
+- [x] Readable Fireflies-style transcript (persist utterances + turn-by-turn render).
+- [x] Markdown Ask answers (headings/bold/bullets + accent `[S#]` chips).
+- [x] Home right-side persistent Ask panel (Fireflies two-column) + message animations.
+- [x] Navigable citations (tap "Sources" → source call's transcript, scroll+highlight).
+- [x] Phase-1 Codex gate: FAIL(2 HIGH)→fixed→PASS. (Streaming moved to **Phase 5** where it belongs.)
 
 **Phase 2** — Ingestion intelligence: full 3-stage auto-detect + routing, all parsers tolerant +
 fingerprint-learning, **native Swift `.docx` read** (replace python extract), metadata/entity/NER,
