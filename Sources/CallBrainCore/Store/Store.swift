@@ -408,7 +408,9 @@ public final class Store: @unchecked Sendable {
     @discardableResult
     public func addReconciledTask(meetingID: String, owner: String?, text: String) throws -> Bool {
         let id = "task_" + UUID().uuidString
-        let key = "ai:" + text.lowercased().trimmingCharacters(in: .whitespaces).prefix(120)
+        // Dedupe on owner + full text (SME LOW — two distinct tasks with different owners or the same first
+        // 120 chars must not collide on the (meeting_id, dedupe_key) UNIQUE).
+        let key = "ai:\(owner?.lowercased() ?? "")|\(text.lowercased().trimmingCharacters(in: .whitespaces))"
         return try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR IGNORE INTO tasks (id, meeting_id, owner, text, status, dedupe_key, created_at)

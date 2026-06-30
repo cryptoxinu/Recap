@@ -150,13 +150,22 @@ final class AppEnvironment {
 
         var rew = 0, comp = 0, dedup = 0, added = 0
         let openIDs = Set(openRows.map(\.item.id))
+        // Sanitize LLM-produced strings before they hit the DB / UI (SME MED — guard empty/huge/multiline).
+        func clean(_ s: String?, max: Int) -> String? {
+            guard let s else { return nil }
+            let t = s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : String(t.prefix(max))
+        }
         for u in plan.reword where openIDs.contains(u.id) {
-            try? store.updateTaskText(id: u.id, text: u.text, owner: u.owner); rew += 1
+            guard let text = clean(u.text, max: 280) else { continue }   // skip garbage rewrites
+            try? store.updateTaskText(id: u.id, text: text, owner: clean(u.owner, max: 80)); rew += 1
         }
         for id in Set(plan.complete) where openIDs.contains(id) { try? store.setTaskStatus(id: id, .done); comp += 1 }
         for id in Set(plan.duplicates) where openIDs.contains(id) { try? store.setTaskStatus(id: id, .done); dedup += 1 }
         for n in plan.add where validIDs.contains(n.meetingID) {
-            if (try? store.addReconciledTask(meetingID: n.meetingID, owner: n.owner, text: n.text)) == true { added += 1 }
+            guard let text = clean(n.text, max: 280) else { continue }
+            if (try? store.addReconciledTask(meetingID: n.meetingID, owner: clean(n.owner, max: 80), text: text)) == true { added += 1 }
         }
         refreshReminders()
         return ReconcileSummary(reworded: rew, completed: comp, deduped: dedup, added: added)
