@@ -50,7 +50,7 @@ struct ProviderRouterTests {
         let router = ProviderRouter(claude: StubProvider(id: .claude, [.success("C")]),
                                     codex: StubProvider(id: .codex, [.success("X")]),
                                     primary: .claude)
-        await router.setPrimary(.codex)
+        router.setPrimary(.codex)   // synchronous (lock-guarded)
         let c = try await router.complete(prompt: "hi", system: nil, model: "m", timeout: 5)
         #expect(c.provider == .codex)
     }
@@ -96,6 +96,15 @@ struct CodexRunnerTests {
         #expect(CodexRunner.looksRateLimited("Error: 429 Too Many Requests"))
         #expect(CodexRunner.looksRateLimited("you hit your usage limit"))
         #expect(!CodexRunner.looksRateLimited("normal output"))
+    }
+
+    @Test("hardened args: ephemeral + ignore-user-config + read-only sandbox (gate CRITICAL/HIGH)")
+    func hardenedArgs() {
+        let a = CodexRunner.baseArgs(cwd: "/tmp/x", outFile: "/tmp/o", model: "gpt-5-codex")
+        #expect(a.contains("--ephemeral"))            // don't persist the RAG prompt
+        #expect(a.contains("--ignore-user-config"))   // no config redirect to an API-key provider
+        #expect(a.contains("read-only"))              // no writes / no network egress
+        #expect(a.contains("-m") && a.contains("gpt-5-codex"))
     }
 
     @Test("LIVE: codex answers a simple prompt",

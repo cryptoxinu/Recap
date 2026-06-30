@@ -8,20 +8,22 @@ public actor ProviderRouter: LLMProvider {
     public nonisolated let id: ProviderID = .claude   // nominal; consumers read Completion.provider
     private let claude: any LLMProvider
     private let codex: any LLMProvider
-    private var primary: ProviderID
+    /// Lock-guarded so a Settings flip is visible to the very next Ask immediately + synchronously,
+    /// with no actor-hop ordering race (Codex P5 gate LOW).
+    private let primaryBox = PrimaryBox()
 
     public private(set) var lastUsed: ProviderID?
     public private(set) var lastFellBack = false
 
     public init(claude: any LLMProvider, codex: any LLMProvider, primary: ProviderID = .claude) {
         self.claude = claude; self.codex = codex
-        self.primary = (primary == .codex) ? .codex : .claude
+        primaryBox.set((primary == .codex) ? .codex : .claude)
     }
 
-    public func setPrimary(_ p: ProviderID) { primary = (p == .codex) ? .codex : .claude }
-    public func currentPrimary() -> ProviderID { primary }
+    public nonisolated func setPrimary(_ p: ProviderID) { primaryBox.set((p == .codex) ? .codex : .claude) }
+    public nonisolated func currentPrimary() -> ProviderID { primaryBox.value }
 
-    private var ordered: [any LLMProvider] { primary == .codex ? [codex, claude] : [claude, codex] }
+    private var ordered: [any LLMProvider] { primaryBox.value == .codex ? [codex, claude] : [claude, codex] }
 
     public func complete(prompt: String, system: String?, model: String,
                          timeout: TimeInterval) async throws -> Completion {
@@ -59,4 +61,11 @@ public actor ProviderRouter: LLMProvider {
         default: return false
         }
     }
+}
+
+/// Thread-safe holder for the primary provider id (read on the actor's executor, written from any thread).
+private final class PrimaryBox: @unchecked Sendable {
+    private let lock = NSLock(); private var v: ProviderID = .claude
+    func set(_ p: ProviderID) { lock.lock(); v = p; lock.unlock() }
+    var value: ProviderID { lock.lock(); defer { lock.unlock() }; return v }
 }

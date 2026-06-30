@@ -8,28 +8,40 @@ import Foundation
 public actor CodexRunner: LLMProvider {
     public let executablePath: String
     public let sandboxDir: String
+    /// The codex model (nil = codex's built-in default). The protocol's `model:` param is a Claude-centric
+    /// hint and is IGNORED here (Codex would otherwise report a model it isn't using — gate MED).
+    private let codexModel: String?
     public nonisolated let id: ProviderID = .codex
 
     /// Scrub API-key env → forces the CLI's subscription/OAuth auth (never a paid key).
-    static let scrubbedEnv = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+    static let scrubbedEnv = ["OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY",
+                              "ANTHROPIC_AUTH_TOKEN", "OPENAI_ORGANIZATION", "OPENAI_PROJECT"]
 
-    public init(executablePath: String = "/opt/homebrew/bin/codex", sandboxDir: String) {
+    public init(executablePath: String = "/opt/homebrew/bin/codex", sandboxDir: String, model: String? = nil) {
         self.executablePath = executablePath
         self.sandboxDir = sandboxDir
+        self.codexModel = model
     }
 
-    static func baseArgs(cwd: String, outFile: String) -> [String] {
-        ["exec", "-s", "read-only", "--skip-git-repo-check", "--cd", cwd, "-o", outFile]
+    /// Hardened invocation (gate CRITICAL/HIGH): `-s read-only` (no writes, no network egress under the
+    /// sandbox), `--ephemeral` (don't persist the private RAG prompt in a session log), and
+    /// `--ignore-user-config` (don't load config.toml that could redirect to a paid API-key provider —
+    /// auth still uses the CODEX_HOME subscription). Output captured to a private last-message file.
+    static func baseArgs(cwd: String, outFile: String, model: String?) -> [String] {
+        var a = ["exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
+                 "--ignore-user-config", "--cd", cwd, "-o", outFile]
+        if let model, !model.isEmpty { a += ["-m", model] }
+        return a
     }
 
     public func complete(prompt: String, system: String? = nil,
-                         model: String = "gpt-5-codex", timeout: TimeInterval = 120) async throws -> Completion {
+                         model: String = "", timeout: TimeInterval = 120) async throws -> Completion {
         let text = try await runCapture(fullPrompt: Self.merge(system, prompt), extraArgs: [], timeout: timeout)
-        return Completion(text: text, provider: .codex, model: model, usage: TokenUsage(), costUSD: 0)
+        return Completion(text: text, provider: .codex, model: codexModel ?? "codex", usage: TokenUsage(), costUSD: 0)
     }
 
     public func completeJSON(prompt: String, system: String?, schema: String,
-                             model: String = "gpt-5-codex", timeout: TimeInterval = 180) async throws -> String {
+                             model: String = "", timeout: TimeInterval = 180) async throws -> String {
         let schemaFile = Self.tempPath(ext: "json")
         try schema.write(toFile: schemaFile, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: schemaFile) }
@@ -50,7 +62,7 @@ public actor CodexRunner: LLMProvider {
 
         let out = try await Subprocess.run(
             executable: executablePath,
-            args: Self.baseArgs(cwd: sandboxDir, outFile: outFile) + extraArgs,
+            args: Self.baseArgs(cwd: sandboxDir, outFile: outFile, model: codexModel) + extraArgs,
             stdin: fullPrompt, cwd: sandboxDir, scrub: Self.scrubbedEnv, timeout: timeout)
 
         if out.exitCode != 0 {

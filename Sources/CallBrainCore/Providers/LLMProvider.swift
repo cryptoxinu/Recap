@@ -97,11 +97,24 @@ enum Subprocess {
             group.enter()
             DispatchQueue.global().async { h.errBuf.set(h.err.fileHandleForReading.readDataToEndOfFile()); group.leave() }
 
-            // Now feed stdin (the child drains it as it reads the prompt) and close.
-            if let stdin { h.inp.fileHandleForWriting.write(Data(stdin.utf8)) }
-            try? h.inp.fileHandleForWriting.close()
+            // Feed stdin on a BACKGROUND queue (Codex P5 gate MED): a synchronous write here would block
+            // scheduling the watchdog if the child stops reading a large prompt — then the timeout never
+            // arms and Ask hangs forever. Off-thread, the watchdog always arms.
+            DispatchQueue.global().async {
+                if let stdin { try? h.inp.fileHandleForWriting.write(contentsOf: Data(stdin.utf8)) }
+                try? h.inp.fileHandleForWriting.close()
+            }
 
-            let watchdog = DispatchWorkItem { if h.process.isRunning { h.timedOut.set(); h.process.terminate() } }
+            // Watchdog: SIGTERM at the deadline, then escalate to SIGKILL if the child ignores it, so a
+            // wedged CLI can't keep `waitUntilExit` (and the whole call) blocked.
+            let watchdog = DispatchWorkItem {
+                guard h.process.isRunning else { return }
+                h.timedOut.set()
+                h.process.terminate()
+                DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+                    if h.process.isRunning { kill(h.process.processIdentifier, SIGKILL) }
+                }
+            }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
             group.enter()

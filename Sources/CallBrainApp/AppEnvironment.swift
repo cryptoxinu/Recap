@@ -64,7 +64,7 @@ final class AppEnvironment {
         let v: ProviderID = (p == .codex) ? .codex : .claude
         providerPrimary = v
         UserDefaults.standard.set(v.rawValue, forKey: Self.providerKey)
-        Task { await router.setPrimary(v) }
+        router.setPrimary(v)   // synchronous (lock-guarded) → visible to the very next Ask
     }
 
     var search: SearchEngine { SearchEngine(store: store, embedder: embedder, space: space) }
