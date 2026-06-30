@@ -27,21 +27,27 @@ public final class KeychainDriveCredentialStore: DriveCredentialStore, @unchecke
         return creds
     }
 
-    public func save(_ c: DriveCredentials) {
-        guard let data = try? JSONEncoder().encode(c) else { return }
+    @discardableResult
+    public func save(_ c: DriveCredentials) -> Bool {
+        guard let data = try? JSONEncoder().encode(c) else { return false }
         // Update-if-present, else add — never delete the existing item before the replacement is stored, so
         // a failed write can't leave the user with no credentials (SME MED). Device-only accessibility
-        // (won't sync to iCloud Keychain) for a high-value refresh token (SME LOW).
+        // (won't sync to iCloud Keychain) for a high-value refresh token (SME LOW). Returns success so
+        // `connect()` won't report "connected" on a failed write (SME MED).
         let attrs: [String: Any] = [kSecValueData as String: data,
                                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
         let status = SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary)
+        if status == errSecSuccess { return true }
         if status == errSecItemNotFound {
             var add = baseQuery
             add.merge(attrs) { _, new in new }
-            if SecItemAdd(add as CFDictionary, nil) == errSecDuplicateItem {
-                _ = SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary)   // lost an add race → update
+            let addStatus = SecItemAdd(add as CFDictionary, nil)
+            if addStatus == errSecSuccess { return true }
+            if addStatus == errSecDuplicateItem {
+                return SecItemUpdate(baseQuery as CFDictionary, attrs as CFDictionary) == errSecSuccess
             }
         }
+        return false
     }
 
     public func clear() { SecItemDelete(baseQuery as CFDictionary) }
@@ -52,6 +58,6 @@ public final class InMemoryDriveCredentialStore: DriveCredentialStore, @unchecke
     private let lock = NSLock(); private var creds: DriveCredentials?
     public init(_ initial: DriveCredentials? = nil) { creds = initial }
     public func load() -> DriveCredentials? { lock.lock(); defer { lock.unlock() }; return creds }
-    public func save(_ c: DriveCredentials) { lock.lock(); creds = c; lock.unlock() }
+    @discardableResult public func save(_ c: DriveCredentials) -> Bool { lock.lock(); creds = c; lock.unlock(); return true }
     public func clear() { lock.lock(); creds = nil; lock.unlock() }
 }

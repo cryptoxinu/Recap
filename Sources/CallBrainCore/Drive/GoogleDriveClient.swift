@@ -14,10 +14,11 @@ public struct DriveCredentials: Codable, Sendable, Equatable {
     }
 }
 
-/// Where Drive credentials live (Keychain in the app; a memory stub in tests).
+/// Where Drive credentials live (Keychain in the app; a memory stub in tests). `save` returns whether the
+/// write actually succeeded so security-critical callers can refuse to report "connected" on a failed write.
 public protocol DriveCredentialStore: Sendable {
     func load() -> DriveCredentials?
-    func save(_ c: DriveCredentials)
+    @discardableResult func save(_ c: DriveCredentials) -> Bool
     func clear()
 }
 
@@ -51,6 +52,7 @@ public actor GoogleDriveClient {
     /// Finish the OAuth handshake: exchange the auth code for tokens and persist the refresh token.
     public func connect(code: String, codeVerifier: String, redirectURI: String,
                         clientID: String, clientSecret: String) async throws {
+        let startEpoch = epoch
         let body = GoogleOAuth.tokenExchangeBody(code: code, clientID: clientID, clientSecret: clientSecret,
                                                  redirectURI: redirectURI, codeVerifier: codeVerifier)
         let data = try await postForm(GoogleOAuth.tokenEndpoint, body: body)
@@ -58,12 +60,14 @@ public actor GoogleDriveClient {
         guard let rt = tr.refresh_token, !rt.isEmpty else {
             throw DriveError.oauth("Google didn't return a refresh token — revoke the app's access and reconnect.")
         }
-        epoch += 1
-        store.save(DriveCredentials(clientID: clientID, clientSecret: clientSecret, refreshToken: rt,
-                                    accessToken: tr.access_token,
-                                    expiry: now().addingTimeInterval(TimeInterval(tr.expires_in ?? 3600))))
+        // If the user disconnected while the token exchange was in flight, don't resurrect the connection.
+        guard epoch == startEpoch else { throw DriveError.notConnected }
+        epoch += 1   // new connection generation (invalidates any prior in-flight refresh)
+        let saved = store.save(DriveCredentials(clientID: clientID, clientSecret: clientSecret, refreshToken: rt,
+                                                accessToken: tr.access_token,
+                                                expiry: now().addingTimeInterval(TimeInterval(tr.expires_in ?? 3600))))
         // Surface a Keychain write that didn't stick, instead of reporting "Connected" falsely (SME MED).
-        guard store.load()?.refreshToken == rt else {
+        guard saved, store.load()?.refreshToken == rt else {
             throw DriveError.badResponse("couldn't save Google credentials to the Keychain")
         }
     }
