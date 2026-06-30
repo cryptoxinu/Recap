@@ -24,7 +24,9 @@ struct HomeView: View {
         .navigationTitle("Home")
         .task {
             withAnimation(Theme.springy) { meetings = env.recentMeetings() }
-            env.backfillTitleIntelligence(); env.backfillSummaries(); env.backfillCategories()
+            // Titles + categories are cheap; full summaries are generated LAZILY when a call is opened
+            // (no eager 14B storm on launch — that was the fan/lag cause).
+            env.backfillTitleIntelligence(); env.backfillCategories()
         }
         .onChange(of: env.titlesRevision) {   // live-refresh as AI titles/categories land — animated, not popped
             withAnimation(Theme.springy) { meetings = env.recentMeetings() }

@@ -76,7 +76,7 @@ public enum CategoryHeuristic {
 public struct CategoryClassifier: Sendable {
     public let model: String
     public let baseURL: URL
-    public init(model: String = "qwen2.5:14b", baseURL: URL = URL(string: "http://127.0.0.1:11434")!) {
+    public init(model: String = "qwen2.5:3b", baseURL: URL = URL(string: "http://127.0.0.1:11434")!) {
         self.model = model; self.baseURL = baseURL
     }
 

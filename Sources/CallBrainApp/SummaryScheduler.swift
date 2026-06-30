@@ -113,8 +113,8 @@ final class SummaryScheduler {
         // Idle (or paused) → evict EVERY model we might have loaded so nothing holds unified memory / draws
         // power. `unload` is a cheap best-effort no-op when a model isn't resident, so unloading the 14B and
         // the 7B fallback both is safe — and necessary, since a low-RAM Mac runs the 7B, not the 14B.
-        for model in Set([env.localSummaryModel, "qwen2.5:7b"]) {
-            await OllamaSummarizer.unload(model: model)
+        for model in Set([env.localSummaryModel, "qwen2.5:7b", "qwen2.5:14b"]) {
+            await OllamaSummarizer.unload(model: model)   // evict any heavy model so nothing stays pinned
         }
         pumping = false
         // Catch anything enqueued during the unload awaits (priority always; auto only if power allows).

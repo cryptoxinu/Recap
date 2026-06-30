@@ -138,9 +138,12 @@ struct MeetingsView: View {
 
     private func reload() {
         // Animate so AI titles/categories/summaries settle in (rows reorder, pills fade) instead of popping.
-        withAnimation(Theme.springy) {
-            meetings = env.recentMeetings()
-            dupCount = DuplicateScan.count(env.store)
+        withAnimation(Theme.springy) { meetings = env.recentMeetings() }
+        // The duplicate scan is an N+1 query — run it OFF the main thread so it never freezes the list.
+        let store = env.store
+        Task {
+            let c = await Task.detached { DuplicateScan.count(store) }.value
+            withAnimation(Theme.springy) { dupCount = c }
         }
     }
 

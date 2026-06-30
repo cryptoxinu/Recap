@@ -113,31 +113,45 @@ final class AppEnvironment {
     /// Bumps when a call's AI title/summary lands, so meeting lists can live-refresh.
     var titlesRevision = 0
 
-    /// Generate (or refresh) the AI title + one-line summary for a call from its content, then persist it.
+    /// Generate (or refresh) the AI title + one-line summary for a call, then persist it. Async core.
+    @discardableResult
+    func runTitleIntelligence(for meetingID: String, force: Bool = false) async -> Bool {
+        guard let m = try? store.meeting(id: meetingID) else { return false }
+        if !force, m.aiTitle?.isEmpty == false { return false }
+        let utts = (try? store.utterances(meetingID: meetingID)) ?? []
+        let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+        guard let r = await TitleIntelligence(llm: router).generate(from: text, fallbackTitle: m.title) else { return false }
+        try? store.setMeetingIntelligence(id: meetingID, aiTitle: r.title, aiSummary: r.summary)
+        titlesRevision &+= 1
+        return true
+    }
+
+    /// Fire-and-forget single title (import path).
     func generateTitleIntelligence(for meetingID: String, force: Bool = false) {
-        Task { [weak self] in
-            guard let self, let m = try? self.store.meeting(id: meetingID) else { return }
-            if !force, m.aiTitle?.isEmpty == false { return }
-            let utts = (try? self.store.utterances(meetingID: meetingID)) ?? []
-            let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
-            guard let r = await TitleIntelligence(llm: self.router).generate(from: text, fallbackTitle: m.title) else { return }
-            try? self.store.setMeetingIntelligence(id: meetingID, aiTitle: r.title, aiSummary: r.summary)
-            self.titlesRevision &+= 1
-        }
+        Task { [weak self] in await self?.runTitleIntelligence(for: meetingID, force: force) }
     }
 
-    /// On launch, fill in titles for any calls that don't have one yet (e.g. imported before this feature).
+    @ObservationIgnored private var titleBackfilling = false
+    /// Fill in titles for calls that don't have one yet — SERIALLY (one CLI call at a time), never a
+    /// stampede of concurrent jobs on launch.
     func backfillTitleIntelligence() {
-        for m in recentMeetings() where (m.aiTitle?.isEmpty ?? true) {
-            generateTitleIntelligence(for: m.id)
+        guard !titleBackfilling else { return }
+        titleBackfilling = true
+        Task { [weak self] in
+            guard let self else { return }
+            for m in self.recentMeetings() where (m.aiTitle?.isEmpty ?? true) {
+                await self.runTitleIntelligence(for: m.id)
+            }
+            self.titleBackfilling = false
         }
     }
 
-    /// The local default. Qwen2.5-14B via Ollama — confirmed best-in-class for transcript summarization +
-    /// owner-tagged action-item JSON (two independent research passes, 2026-06-30); free, private, out of
-    /// the box, ~10-15s on Apple Silicon. Configurable in Settings; 7B is the low-RAM fallback.
+    /// The routine local model. Qwen2.5-3B via Ollama — ~3× faster + 4-8× cooler than 14B (so a background
+    /// summary never spins the fans), while still the most JSON-reliable model in its class (research
+    /// 2026-06-30). The heavyweight 14B / premium quality is the explicit "Regenerate with AI" (cloud Opus)
+    /// pass only — never automatic. Configurable in Settings.
     var localSummaryModel: String {
-        UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:14b"
+        UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:3b"
     }
 
     /// Generate the Summary-tab content for a call.
@@ -160,12 +174,11 @@ final class AppEnvironment {
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
-        // Local-first chain: best local model → smaller local fallback (if 14B isn't pulled) → cloud as a
-        // last resort. `preferCloud` (the Regenerate button) goes straight to the premium CLI pass.
+        // Local-first chain: the small routine model → cloud as a last resort if Ollama is unavailable.
+        // `preferCloud` (the "Regenerate with AI" button) goes straight to the premium CLI pass (Opus).
         let summarizers: [any Summarizer] = preferCloud
             ? [CLISummarizer(llm: router, model: "opus")]
             : [OllamaSummarizer(model: localSummaryModel),
-               OllamaSummarizer(model: "qwen2.5:7b"),
                CLISummarizer(llm: router, model: "sonnet")]
         var result: CallSummary?
         for s in summarizers { if let r = await s.summarize(transcript: text, title: m.displayTitle) { result = r; break } }

@@ -118,10 +118,7 @@ struct RootView: View {
             .navigationTitle("CallBrain")
             .safeAreaInset(edge: .bottom) { appearancePicker }
         } detail: {
-            detailContent
-                .transition(.opacity)
-                .id(selection ?? .home)                       // treat each tab as a replaced subtree…
-                .animation(Theme.smooth, value: selection)    // …so tabs cross-fade instead of hard-cutting
+            detailContent   // instant tab switch (native macOS behavior — no heavy cross-fade rebuild)
         }
         .preferredColorScheme(appearanceMode.scheme)
         .task { NotificationManager.refresh(openTaskCount: env.openTaskCount()) }

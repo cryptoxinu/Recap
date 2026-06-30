@@ -95,7 +95,7 @@ public struct OllamaSummarizer: Summarizer {
     public let keepAlive: String
     public var label: String { "Local (\(model))" }
 
-    public init(model: String = "qwen2.5:14b", baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
+    public init(model: String = "qwen2.5:3b", baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
                 numCtx: Int = 16384, keepAlive: String = "60s") {
         self.model = model; self.baseURL = baseURL; self.numCtx = numCtx; self.keepAlive = keepAlive
     }

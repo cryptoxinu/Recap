@@ -29,6 +29,8 @@ cp "$ROOT/.build/release/CallBrainApp" "$APP/Contents/MacOS/CallBrain"
 cp "$ROOT/tools/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
+# SPM resource bundles (e.g. the app icon PNG) must travel inside the .app to be self-contained.
+find "$ROOT/.build/release" -maxdepth 1 -name "*.bundle" -exec cp -R {} "$APP/Contents/Resources/" \;
 
 echo "▸ codesign (Hardened Runtime, leaf-first: any embedded dylibs/frameworks before the app)"
 find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \

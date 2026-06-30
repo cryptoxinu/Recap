@@ -30,7 +30,7 @@ struct MeetingDetailView: View {
     private var showsTabs: Bool { true }
     private var hasSummary: Bool { !(meeting?.callSummary?.isEmpty ?? true) }
 
-    struct TurnGroup: Identifiable {
+    struct TurnGroup: Identifiable, Sendable {
         let id: Int
         let speaker: String
         let tStart: Double?
@@ -39,11 +39,26 @@ struct MeetingDetailView: View {
         var joined: String { lines.joined(separator: " ") }
     }
 
-    /// Group ids matching the find query (transcript), in order.
-    private var matches: [Int] {
+    /// Everything the detail view loads for a call — built OFF the main thread so opening a large call
+    /// never freezes navigation.
+    struct LoadSnapshot: Sendable {
+        var meeting: Store.MeetingRow?
+        var tasks: [ActionItem] = []
+        var people: [Entity] = []
+        var noteLines: [String] = []
+        var groups: [TurnGroup] = []
+    }
+
+    /// Group ids matching the find query (transcript), in order — CACHED so it's computed once per query
+    /// change, not re-filtered for every row (that was O(n²) on long transcripts).
+    @State private var matchIDs: [Int] = []
+    @State private var matchSet: Set<Int> = []
+    private var matches: [Int] { matchIDs }
+    private func recomputeMatches() {
         let q = findText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return [] }
-        return groups.filter { $0.joined.lowercased().contains(q) || $0.speaker.lowercased().contains(q) }.map(\.id)
+        guard !q.isEmpty else { matchIDs = []; matchSet = []; return }
+        matchIDs = groups.filter { $0.joined.lowercased().contains(q) || $0.speaker.lowercased().contains(q) }.map(\.id)
+        matchSet = Set(matchIDs)
     }
     /// Note lines matching the find query (Gemini notes render as one collapsed group, so the transcript
     /// `matches` count would always be 1 — count actual lines instead; gate LOW).
@@ -82,7 +97,8 @@ struct MeetingDetailView: View {
                 if let f = ProcessInfo.processInfo.environment["CALLBRAIN_FIND"], !f.isEmpty {
                     findActive = true; findText = f
                     if showsTabs { tab = .transcript }           // mount the transcript so matches scroll
-                    if let first = matches.first { scrollTo(first, proxy) }
+                    recomputeMatches()
+                    if let first = matchIDs.first { scrollTo(first, proxy) }
                 }
                 await scrollToHighlight(proxy)
             }
@@ -110,7 +126,10 @@ struct MeetingDetailView: View {
             TextField(isNotes ? "Find in notes…" : "Find in transcript…", text: $findText)
                 .textFieldStyle(.plain)
                 .onSubmit { jump(+1, proxy) }
-                .onChange(of: findText) { _, _ in matchIndex = 0; if !isNotes, let f = matches.first { scrollTo(f, proxy) } }
+                .onChange(of: findText) { _, _ in
+                    matchIndex = 0; recomputeMatches()
+                    if !isNotes, let f = matchIDs.first { scrollTo(f, proxy) }
+                }
             if isNotes {
                 // Notes have no scroll anchors → highlight-only, but report the real matching-line count.
                 if noteMatchCount > 0 {
@@ -206,7 +225,7 @@ struct MeetingDetailView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(groups) { turn($0).id($0.id) }
                 }
-                .animation(Theme.springy, value: groups.map(\.id))
+                .animation(Theme.springy, value: groups.count)
                 .transition(.opacity)
             }
         }
@@ -352,7 +371,7 @@ struct MeetingDetailView: View {
     }
 
     private func turn(_ g: TurnGroup) -> some View {
-        let isMatch = !findText.isEmpty && matches.contains(g.id)
+        let isMatch = !findText.isEmpty && matchSet.contains(g.id)
         let isCurrentMatch = isMatch && matches.indices.contains(matchIndex) && matches[matchIndex] == g.id
         return HStack(alignment: .top, spacing: 12) {
             avatar(g.speaker)
@@ -439,21 +458,34 @@ struct MeetingDetailView: View {
     }
 
     private func load() async {
-        if let m = try? env.store.meeting(id: meetingID) { meeting = m }
-        tasks = (try? env.store.tasks(meetingID: meetingID)) ?? []
-        let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
-        if meeting?.source == "gmeet_gemini" {
-            // Fall back to transcript_chunks for older rows that have no utterances, so notes never go blank.
-            noteLines = utts.isEmpty
-                ? ((try? env.store.transcript(meetingID: meetingID)) ?? []).map(\.text)
+        // All the SQLite reads + transcript grouping happen OFF the main thread (Store is Sendable), then
+        // we assign state on the main actor — so opening a long call doesn't freeze the sidebar/navigation.
+        let store = env.store, id = meetingID
+        let snap = await Task.detached { MeetingDetailView.buildSnapshot(store: store, meetingID: id) }.value
+        meeting = snap.meeting
+        tasks = snap.tasks
+        people = snap.people
+        noteLines = snap.noteLines
+        groups = snap.groups
+        recomputeMatches()
+        recomputeHighlight()
+    }
+
+    nonisolated static func buildSnapshot(store: Store, meetingID: String) -> LoadSnapshot {
+        var snap = LoadSnapshot(meeting: try? store.meeting(id: meetingID))
+        snap.tasks = (try? store.tasks(meetingID: meetingID)) ?? []
+        let utts = (try? store.utterances(meetingID: meetingID)) ?? []
+        if snap.meeting?.source == "gmeet_gemini" {
+            snap.noteLines = utts.isEmpty
+                ? ((try? store.transcript(meetingID: meetingID)) ?? []).map(\.text)
                 : utts.map(\.text)
         } else {
-            people = ((try? env.store.entities(meetingID: meetingID)) ?? [])
+            snap.people = ((try? store.entities(meetingID: meetingID)) ?? [])
                 .filter { $0.kind == .person && $0.count >= 2 }.prefix(10).map { $0 }
         }
         let rows: [(speaker: String, t: Double?, inferred: Bool, text: String)]
         if utts.isEmpty {
-            rows = ((try? env.store.transcript(meetingID: meetingID)) ?? [])
+            rows = ((try? store.transcript(meetingID: meetingID)) ?? [])
                 .map { (speaker: $0.speaker ?? "—", t: $0.tStart, inferred: false, text: $0.text) }
         } else {
             rows = utts.map { (speaker: $0.speaker ?? "—", t: $0.tStart, inferred: $0.isInferred, text: $0.text) }
@@ -467,7 +499,7 @@ struct MeetingDetailView: View {
                                         isInferred: r.inferred, lines: [r.text]))
             }
         }
-        groups = result
-        recomputeHighlight()
+        snap.groups = result
+        return snap
     }
 }
