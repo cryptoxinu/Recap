@@ -8,7 +8,10 @@ struct MeetingDetailView: View {
 
     @State private var meeting: Store.MeetingRow?
     @State private var groups: [TurnGroup] = []
+    @State private var noteLines: [String] = []      // populated for Gemini-notes meetings
     @State private var highlightGroupID: Int?
+
+    private var isNotes: Bool { meeting?.source == "gmeet_gemini" }
 
     struct TurnGroup: Identifiable {
         let id: Int
@@ -24,8 +27,12 @@ struct MeetingDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     Divider()
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(groups) { turn($0).id($0.id) }
+                    if isNotes {
+                        GeminiNotesView(lines: noteLines, title: meeting?.title)
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(groups) { turn($0).id($0.id) }
+                        }
                     }
                 }
                 .padding(28)
@@ -50,7 +57,11 @@ struct MeetingDetailView: View {
                 HStack(spacing: 14) {
                     Label(m.date, systemImage: "calendar")
                     Label(sourceLabel(m.source), systemImage: "doc.text")
-                    Label("\(groups.count) turns", systemImage: "bubble.left.and.bubble.right")
+                    if isNotes {
+                        Label("AI meeting notes", systemImage: "sparkles")
+                    } else {
+                        Label("\(groups.count) turns", systemImage: "bubble.left.and.bubble.right")
+                    }
                 }
                 .font(.caption).foregroundStyle(.secondary)
             }
@@ -119,6 +130,9 @@ struct MeetingDetailView: View {
     private func load() async {
         if let m = try? env.store.meeting(id: meetingID) { meeting = m }
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
+        if meeting?.source == "gmeet_gemini" {
+            noteLines = utts.map(\.text)
+        }
         let rows: [(speaker: String, t: Double?, inferred: Bool, text: String)]
         if utts.isEmpty {
             rows = ((try? env.store.transcript(meetingID: meetingID)) ?? [])

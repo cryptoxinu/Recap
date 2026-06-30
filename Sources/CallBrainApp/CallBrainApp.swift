@@ -63,12 +63,17 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
             .navigationTitle("CallBrain")
         } detail: {
-            switch selection ?? .home {
-            case .home: HomeView()
-            case .ask: AskView()
-            case .meetings: MeetingsView()
-            case .imports: ImportView()
-            case .settings: SettingsView()
+            // CALLBRAIN_MEETING=<id> opens straight to a meeting detail (screenshot QA only).
+            if let mid = ProcessInfo.processInfo.environment["CALLBRAIN_MEETING"], !mid.isEmpty {
+                MeetingDetailView(meetingID: mid)
+            } else {
+                switch selection ?? .home {
+                case .home: HomeView()
+                case .ask: AskView()
+                case .meetings: MeetingsView()
+                case .imports: ImportView()
+                case .settings: SettingsView()
+                }
             }
         }
     }
