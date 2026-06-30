@@ -112,7 +112,7 @@ sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
   sync-to-audio); timestamp-linked citations; **agentic transparent reasoning timeline** during search; durable
   **conversation history / Recents** (revisit prior chats). Builds on Phase 4 modes/planner.
 **Phase 5 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** claude↔codex flip (Settings, persisted) + transparent fallback on rate-limit/unavailability + provider badge; CodexRunner live-verified (PONG) + injection-hardened (--ephemeral/--ignore-user-config/read-only). Gate: 1 CRITICAL+1 HIGH+2 MED+1 LOW fixed (docs/audits/phase5-audit.md). (122 green.)
-**Phase 6** — Native polish: background jobs, notifications (overdue tasks), menu-bar, Google Drive sync, Duplicate Review.
+**Phase 6 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** Duplicate Review (strong-signal near-dup + safe cascade delete), daily action-item reminders, menu-bar status + background-job survival (beginActivity). DEFERRED (needs founder Google OAuth): Drive auto-sync. Gate: 1 HIGH+2 MED+2 LOW fixed (docs/audits/phase6-audit.md). (130 green.)
 **Phase 7** — Archive migration: bulk backfill of the real multi-year archive, threshold tuning, usearch at scale.
 **Phase 8** — Packaging: Developer-ID sign + notarize + Sparkle, `.cbk` backup/restore, first-run wizard.
 Each phase ends with a **Codex audit gate** (PHASE-PLAN has the per-phase checklist).
