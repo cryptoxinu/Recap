@@ -252,6 +252,24 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    public struct MeetingRow: Sendable, Equatable, Identifiable {
+        public let id: String
+        public let title: String
+        public let date: String
+        public let source: String
+    }
+
+    public func recentMeetings(limit: Int = 200) throws -> [MeetingRow] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, title, date, source FROM meetings
+                ORDER BY date_epoch DESC, created_at DESC LIMIT ?
+                """, arguments: [limit]).map {
+                    MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"])
+                }
+        }
+    }
+
     public func meetingCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }

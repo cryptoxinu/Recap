@@ -15,6 +15,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "CallBrainCore", targets: ["CallBrainCore"]),
+        .executable(name: "CallBrainApp", targets: ["CallBrainApp"]),
     ],
     dependencies: [
         // SQLite (WAL + FTS5) source of truth. sqlite-vec/usearch graduate later; the V1 vector
@@ -25,6 +26,11 @@ let package = Package(
         .target(
             name: "CallBrainCore",
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "CallBrainApp",
+            dependencies: ["CallBrainCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
