@@ -65,15 +65,16 @@ public struct IngestEngine: Sendable {
                              text: ch.text, tokenCount: ch.approxTokens,
                              contentHash: "sha256:" + Self.sha256(ch.text))
         }
-        try store.saveMeeting(meeting, chunks: inputs)
-
-        for (i, ch) in chunks.enumerated() {
-            try store.saveEmbedding(chunkID: "\(meetingID)_c\(ch.seq)", space: space, dim: embedder.dim,
-                                    modelID: embedder.modelID, vector: vectors[i],
-                                    contentHash: "sha256:" + Self.sha256(ch.text))
+        let embInputs = chunks.enumerated().map { i, ch in
+            Store.EmbeddingInput(chunkID: "\(meetingID)_c\(ch.seq)", space: space, dim: embedder.dim,
+                                 modelID: embedder.modelID, vector: vectors[i],
+                                 contentHash: "sha256:" + Self.sha256(ch.text))
         }
+        // Atomic (Codex audit fix): meeting + chunks + embeddings persist in ONE transaction, so a
+        // failure can't leave a searchable but partially-embedded meeting.
+        try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs)
 
-        return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: chunks.count)
+        return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: embInputs.count)
     }
 
     static func sha256(_ s: String) -> String {

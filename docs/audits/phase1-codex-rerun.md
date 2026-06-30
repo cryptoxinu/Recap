@@ -1,0 +1,12 @@
+| finding | status fixed/open | note |
+|---|---:|---|
+| candidateChunkIDs only scoped vector lane, not FTS | fixed | Empty candidates return early and FTS hits are filtered by candidate set: [SearchEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Retrieve/SearchEngine.swift:32), [SearchEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Retrieve/SearchEngine.swift:36). Nit: FTS limit happens before candidate filtering, so scoped recall can under-hit. |
+| `Store.vectors([])` fell through to all vectors | fixed | `[]` now returns `[]` before querying: [Store.swift](/Users/z/CallBrain/Sources/CallBrainCore/Store/Store.swift:189). |
+| corrupt blobs silently dropped | fixed | decode failure throws `StoreError.corruptEmbedding`: [Store.swift](/Users/z/CallBrain/Sources/CallBrainCore/Store/Store.swift:204). |
+| embedder checked only first dim + ingest persisted fewer embeddings silently | fixed | Ollama validates batch count and every vector dim: [Embedder.swift](/Users/z/CallBrain/Sources/CallBrainCore/Embedding/Embedder.swift:51). Ingest rejects embedding-count mismatch before persistence: [IngestEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Ingest/IngestEngine.swift:47). |
+| subprocess drained stdout/stderr only after stdin write | fixed | stdout/stderr drains start before stdin write: [LLMProvider.swift](/Users/z/CallBrain/Sources/CallBrainCore/Providers/LLMProvider.swift:73). |
+| `ProcHolder` sends raw `Process`/`Pipe` across queues | fixed | State is wrapped in `@unchecked Sendable`; buffers/flag are lock-guarded, with documented invariants: [LLMProvider.swift](/Users/z/CallBrain/Sources/CallBrainCore/Providers/LLMProvider.swift:117). |
+| NEW: ingest is not atomic across meeting/chunks + embeddings | open | `saveMeeting` is one transaction, then embeddings are saved one-by-one in separate writes; a later `saveEmbedding` failure leaves a searchable partial ingest: [IngestEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Ingest/IngestEngine.swift:68), [IngestEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Ingest/IngestEngine.swift:70), [Store.swift](/Users/z/CallBrain/Sources/CallBrainCore/Store/Store.swift:177). |
+| NEW: FTS candidate scoping can under-recall after global limit | open | `keywordSearch(... limit: ftsLimit)` applies the limit before candidate filtering in Swift; candidate-scoped FTS should be pushed into SQL before `LIMIT`: [SearchEngine.swift](/Users/z/CallBrain/Sources/CallBrainCore/Retrieve/SearchEngine.swift:36). |
+
+VERDICT: FAIL

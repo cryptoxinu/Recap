@@ -122,8 +122,25 @@ public final class Store: @unchecked Sendable {
         }
     }
 
-    /// Persist a meeting and its chunks in one transaction (FTS rows are maintained by triggers).
-    public func saveMeeting(_ m: Meeting, chunks: [ChunkInput]) throws {
+    /// An embedding ready to persist atomically alongside its chunk.
+    public struct EmbeddingInput: Sendable, Equatable {
+        public let chunkID: String
+        public let space: String
+        public let dim: Int
+        public let modelID: String
+        public let vector: [Float]
+        public let contentHash: String
+        public init(chunkID: String, space: String, dim: Int, modelID: String,
+                    vector: [Float], contentHash: String) {
+            self.chunkID = chunkID; self.space = space; self.dim = dim
+            self.modelID = modelID; self.vector = vector; self.contentHash = contentHash
+        }
+    }
+
+    /// Persist a meeting, its chunks, AND their embeddings in ONE transaction (Codex audit fix:
+    /// ingest must be atomic so a failure can't leave a searchable, partially-embedded meeting).
+    /// FTS rows are maintained by triggers.
+    public func saveMeeting(_ m: Meeting, chunks: [ChunkInput], embeddings: [EmbeddingInput] = []) throws {
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
@@ -137,6 +154,12 @@ public final class Store: @unchecked Sendable {
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [c.chunkID, c.meetingID, c.version, c.seq, c.speaker, c.personID,
                                      c.tStart, c.tEnd, c.text, c.tokenCount, c.explanatoryScore, c.contentHash])
+            }
+            for e in embeddings {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO embeddings (chunk_id, space, dim, model_id, vector, content_hash)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, arguments: [e.chunkID, e.space, e.dim, e.modelID, VectorMath.encode(e.vector), e.contentHash])
             }
         }
     }
@@ -152,19 +175,29 @@ public final class Store: @unchecked Sendable {
     }
 
     /// Keyword/catalogue search over chunk text. `query` is an FTS5 MATCH expression (terms).
-    public func keywordSearch(_ query: String, limit: Int = 20) throws -> [ChunkHit] {
+    /// `candidateChunkIDs` scopes the search IN SQL **before** LIMIT (Codex audit fix: scoping after a
+    /// global LIMIT under-recalls). nil = whole corpus; [] = nothing.
+    public func keywordSearch(_ query: String, limit: Int = 20,
+                              candidateChunkIDs: [String]? = nil) throws -> [ChunkHit] {
+        if let ids = candidateChunkIDs, ids.isEmpty { return [] }
         let terms = Self.sanitizeFTS(query)
         guard !terms.isEmpty else { return [] }
         return try dbQueue.read { db in
-            let rows = try Row.fetchAll(db, sql: """
+            var sql = """
                 SELECT f.chunk_id AS chunk_id, f.meeting_id AS meeting_id, f.speaker AS speaker,
                        c.text AS text, bm25(chunks_fts) AS score
                 FROM chunks_fts f
                 JOIN transcript_chunks c ON c.chunk_id = f.chunk_id
                 WHERE chunks_fts MATCH ?
-                ORDER BY score
-                LIMIT ?
-                """, arguments: [terms, limit])
+                """
+            var args: [(any DatabaseValueConvertible)?] = [terms]
+            if let ids = candidateChunkIDs {
+                sql += " AND f.chunk_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))"
+                args.append(contentsOf: ids)
+            }
+            sql += " ORDER BY score LIMIT ?"
+            args.append(limit)
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args))
             return rows.map { r in
                 ChunkHit(chunkID: r["chunk_id"], meetingID: r["meeting_id"],
                          speaker: r["speaker"], text: r["text"], bm25: r["score"] ?? 0)

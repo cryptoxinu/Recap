@@ -27,14 +27,9 @@ public struct SearchEngine: Sendable {
     public func hybrid(_ query: String, candidateChunkIDs: [String]? = nil,
                        ftsLimit: Int = 50, vecLimit: Int = 50, finalLimit: Int = 20,
                        weights: [Double]? = nil) async throws -> [Result] {
-        // Hard-filter candidate set applies to BOTH lanes (Codex audit fix): an empty set means no
-        // results at all; a non-nil set scopes the keyword lane too, not just the vector lane.
-        let candSet = candidateChunkIDs.map(Set.init)
-        if let cs = candSet, cs.isEmpty { return [] }
-
-        // Keyword lane (synchronous, indexed), scoped to candidates.
-        let ftsHits = try store.keywordSearch(query, limit: ftsLimit)
-            .filter { candSet?.contains($0.chunkID) ?? true }
+        // Hard-filter candidate set applies to BOTH lanes IN SQL before LIMIT (Codex audit fix):
+        // scoped recall is exact, and an empty set yields no results from either lane.
+        let ftsHits = try store.keywordSearch(query, limit: ftsLimit, candidateChunkIDs: candidateChunkIDs)
         let ftsRanked = ftsHits.map(\.chunkID)
 
         // Semantic lane: embed the query with the SAME model, exact cosine over the candidate vectors.
