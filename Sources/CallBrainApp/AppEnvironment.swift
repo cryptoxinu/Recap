@@ -22,9 +22,15 @@ final class AppEnvironment {
     private(set) var importCoordinator: ImportCoordinator!
     /// Optional "watch a folder and auto-import" (created after the coordinator).
     private(set) var autoImport: FolderAutoImport!
+    /// Google Drive cloud sync (OAuth) — dormant until the founder configures + connects.
+    private(set) var drive: GoogleDriveConnect!
     /// The global Ask-AI conversation, owned here (not by the view) so an in-flight answer keeps running in
     /// the background and survives navigating away and back (founder bug 2026-06-30).
     let askChat = ChatModel()
+    /// Per-call AskFred chats, also env-owned so an in-flight in-meeting answer survives leaving and
+    /// reopening the workspace (parity with the global chat). Not observed — views observe the returned
+    /// model, not this cache.
+    @ObservationIgnored private var meetingChats: [String: ChatModel] = [:]
     let dbPath: String
 
     init() {
@@ -64,6 +70,7 @@ final class AppEnvironment {
         self.router = ProviderRouter(claude: claude, codex: codexRunner, primary: savedPrimary)
         self.importCoordinator = ImportCoordinator(env: self)
         self.autoImport = FolderAutoImport(env: self)   // resumes watching a configured folder, if any
+        self.drive = GoogleDriveConnect(env: self)      // dormant unless the founder connected Google Drive
     }
 
     static let providerKey = "callbrain.providerPrimary"
@@ -96,6 +103,31 @@ final class AppEnvironment {
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }
     func openTaskCount() -> Int { (try? store.openTaskCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }
+
+    /// Delete a call and everything derived from it (chunks/embeddings/utterances/entities/tasks +
+    /// meeting-scoped chats, with citations to it scrubbed from other chats). Refreshes the reminder
+    /// since open-task counts may change. Returns false on failure (surfaced in the UI).
+    @discardableResult
+    func deleteMeeting(_ id: String) -> Bool {
+        do { try store.deleteMeeting(id: id); refreshReminders(); meetingChats[id] = nil; return true }
+        catch { return false }
+    }
+
+    /// The (background-survivable) AskFred chat for a call, created on first open and reused thereafter.
+    /// Capped so a long session that opens many calls can't pin an unbounded number of ChatModels — idle
+    /// chats are evicted first, never one with an answer in flight (SME).
+    func meetingChat(_ meetingID: String) -> ChatModel {
+        if let c = meetingChats[meetingID] { return c }
+        if meetingChats.count >= 24 {
+            for (k, v) in meetingChats where !v.busy {
+                meetingChats[k] = nil
+                if meetingChats.count < 24 { break }
+            }
+        }
+        let c = ChatModel(meetingID: meetingID)
+        meetingChats[meetingID] = c
+        return c
+    }
 
     /// Re-arm the daily reminder with the current open-task count — call whenever tasks change (completed,
     /// imported, or a meeting deleted) so a scheduled notification never fires a stale count (P6 gate MED).

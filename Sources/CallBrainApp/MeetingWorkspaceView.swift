@@ -7,13 +7,9 @@ import CallBrainCore
 struct MeetingWorkspaceView: View {
     @Environment(AppEnvironment.self) private var env
     let meetingID: String
-    @State private var chat: ChatModel
     @State private var focusChunkID: String?     // citation tap → scroll the transcript pane
-
-    init(meetingID: String) {
-        self.meetingID = meetingID
-        _chat = State(initialValue: ChatModel(meetingID: meetingID))
-    }
+    // Env-owned so an in-flight answer survives leaving + reopening this call's workspace.
+    private var chat: ChatModel { env.meetingChat(meetingID) }
 
     var body: some View {
         // A width-respecting split: panes always sum to EXACTLY the available width. (HSplitView honored

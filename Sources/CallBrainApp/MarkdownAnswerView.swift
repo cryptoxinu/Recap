@@ -91,7 +91,8 @@ struct MarkdownAnswerView: View {
     /// `[S1](https://…)` → `[S1]`: a model occasionally formats a citation as a link, which the Markdown
     /// parser would render as bare `S1` (brackets eaten) and `webContent` would miscount as a web source.
     static func stripCitationLinks(_ s: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: #"\[(S\d+)\]\(https?://[^\s)]+\)"#) else { return s }
+        // URL pattern allows one level of balanced parens (e.g. …/Foo_(bar)) so the link isn't truncated.
+        guard let re = try? NSRegularExpression(pattern: #"\[(S\d+)\]\(https?://(?:[^\s()]|\([^\s()]*\))+\)"#) else { return s }
         let ns = s as NSString
         return re.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: ns.length), withTemplate: "[$1]")
     }
@@ -100,7 +101,11 @@ struct MarkdownAnswerView: View {
     /// collect every web link into a numbered, deduped list for the "Web sources" dropdown. A Markdown link
     /// `[label](url)` is kept (renders as just `label`); a bare `https://…` URL becomes `[host](url)`.
     static func webContent(_ s: String) -> (text: String, sources: [WebSource]) {
-        let pattern = #"\[[^\]]+\]\((https?://[^\s)]+)\)|(https?://[^\s)\]]+)"#
+        // Bare-URL branch (group 2) allows ')' inside the URL; `trimURL` then strips trailing sentence
+        // punctuation + any unbalanced closing paren back into the prose (SME M5 — Wikipedia-style URLs).
+        // Markdown-link URL (group 1) allows one level of balanced parens so Wikipedia-style links aren't
+        // truncated at the first ')'; bare URL (group 2) is cleaned by trimURL (SME).
+        let pattern = #"\[[^\]]+\]\((https?://(?:[^\s()]|\([^\s()]*\))+)\)|(https?://[^\s\]]+)"#
         guard let re = try? NSRegularExpression(pattern: pattern) else { return (s, []) }
         let ns = s as NSString
         var out = ""; var cursor = 0
@@ -114,10 +119,12 @@ struct MarkdownAnswerView: View {
                 note(ns.substring(with: m.range(at: 1)))
                 out += ns.substring(with: m.range)                 // keep the markdown link (clean label)
             } else if m.range(at: 2).location != NSNotFound {
-                let u = ns.substring(with: m.range(at: 2))
+                let raw = ns.substring(with: m.range(at: 2))
+                let u = trimURL(raw)
                 note(u)
                 let host = URL(string: u)?.host?.replacingOccurrences(of: "www.", with: "") ?? "link"
                 out += "[\(host)](\(u))"                            // bare URL → short domain link
+                out += String(raw.dropFirst(u.count))              // trailing ")." etc. stays as prose
             }
             cursor = m.range.location + m.range.length
         }
@@ -128,6 +135,22 @@ struct MarkdownAnswerView: View {
             return WebSource(id: i + 1, label: label, url: url)
         }
         return (out, sources)
+    }
+
+    /// Strip trailing sentence punctuation and any *unbalanced* closing paren from a captured bare URL, so
+    /// a URL that legitimately contains balanced parens (…/Foo_(disambiguation)) is kept whole while a URL
+    /// merely wrapped in prose parens "(see https://x.com/a)" doesn't swallow the closing ')'.
+    static func trimURL(_ u: String) -> String {
+        var s = Substring(u)
+        while let last = s.last {
+            if ".,;:!?\"'".contains(last) { s = s.dropLast(); continue }
+            if last == ")" {
+                let opens = s.filter { $0 == "(" }.count, closes = s.filter { $0 == ")" }.count
+                if closes > opens { s = s.dropLast(); continue }
+            }
+            break
+        }
+        return String(s)
     }
 
     static func blocks(_ text: String) -> [Block] {

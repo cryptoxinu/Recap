@@ -9,6 +9,10 @@ struct SettingsView: View {
     @State private var taskReminders = false
     @State private var backupStatus: String?
     @State private var restoreStaged = false
+    // Google Drive setup
+    @State private var driveSetupShown = false
+    @State private var driveClientID = ""
+    @State private var driveClientSecret = ""
 
     var body: some View {
         Form {
@@ -45,7 +49,12 @@ struct SettingsView: View {
                          + "imports new transcripts & recordings automatically as they land — no manual step.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Button("Detect Google Drive “Meet Recordings” folder") { detectDriveFolder() }
+                Text("If you run the Google Drive app, this finds where your Google Meet (Gemini) notes sync "
+                     + "and watches it automatically — no sign-in needed.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
+            driveSection
             Section("Reminders") {
                 Toggle("Daily action-item reminder", isOn: $taskReminders)
                     .onChange(of: taskReminders) { _, on in
@@ -79,7 +88,78 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
-        .onAppear { primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled }
+        .onAppear {
+            primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled
+            if env.drive.connected, env.drive.availableFolders.isEmpty {
+                Task { await env.drive.loadFolders() }
+            }
+        }
+    }
+
+    @ViewBuilder private var driveSection: some View {
+        Section("Google Drive (cloud sync)") {
+            let drive = env.drive!
+            if drive.connected {
+                LabeledContent("Folder") {
+                    Menu(drive.folderName ?? "Choose a folder…") {
+                        if drive.availableFolders.isEmpty {
+                            Button("Load my folders…") { Task { await drive.loadFolders() } }
+                        }
+                        ForEach(drive.availableFolders) { f in
+                            Button(f.name) { drive.selectFolder(f) }
+                        }
+                    }
+                }
+                HStack {
+                    Button(drive.syncing ? "Syncing…" : "Sync now") { Task { await drive.syncNow() } }
+                        .disabled(drive.syncing || drive.folderName == nil)
+                    Button("Disconnect", role: .destructive) { drive.disconnect() }
+                    Spacer()
+                    if drive.lastSyncCount > 0 {
+                        Text("\(drive.lastSyncCount) imported this session").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !drive.status.isEmpty { Text(drive.status).font(.caption).foregroundStyle(.secondary) }
+            } else if drive.isConfigured {
+                Button("Connect Google Drive…") { Task { await drive.connect() } }
+                Button("Change OAuth client") { driveSetupShown = true }
+                if !drive.status.isEmpty { Text(drive.status).font(.caption).foregroundStyle(.secondary) }
+            } else {
+                Button("Set up Google Drive sync…") { driveSetupShown = true }
+                Text("Pull your Google Meet notes & transcripts straight from Drive — no desktop app needed. "
+                     + "One-time setup: create a free Google OAuth client (≈5 min, see docs/GOOGLE-DRIVE-SETUP.md). "
+                     + "For zero setup, use “Detect Google Drive folder” above instead.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .sheet(isPresented: $driveSetupShown) { driveSetupSheet }
+    }
+
+    private var driveSetupSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Connect Google Drive").font(.title2).bold()
+            Text("Paste your Google OAuth client ID and secret (a “Desktop app” client). The exact steps are "
+                 + "in docs/GOOGLE-DRIVE-SETUP.md — it takes about 5 minutes and keeps everything on your account.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField("Client ID", text: $driveClientID).textFieldStyle(.roundedBorder)
+            SecureField("Client secret", text: $driveClientSecret).textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { driveSetupShown = false }
+                Button("Save") {
+                    env.drive.configure(clientID: driveClientID, clientSecret: driveClientSecret)
+                    driveClientID = ""; driveClientSecret = ""; driveSetupShown = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(driveClientID.isEmpty || driveClientSecret.isEmpty)
+            }
+        }
+        .padding(24).frame(width: 480)
+    }
+
+    private func detectDriveFolder() {
+        if let url = GoogleDriveDetect.meetRecordingsFolder() { env.autoImport.setFolder(url) }
+        else { pickWatchFolder() }   // none found locally → let them point at it manually
     }
 
     private func pickWatchFolder() {
