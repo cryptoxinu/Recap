@@ -22,7 +22,7 @@ public enum DocxReader {
 
         guard let entry = archive["word/document.xml"] else { throw DocxError.noDocumentXML }
         // Reject before inflating if the entry advertises an absurd uncompressed size (zip-bomb guard).
-        if entry.uncompressedSize > Int64(maxDocumentBytes) {
+        if entry.uncompressedSize > UInt64(maxDocumentBytes) {
             throw DocxError.tooLarge(mb: Int(entry.uncompressedSize / (1024 * 1024)))
         }
         var data = Data()

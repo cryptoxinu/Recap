@@ -58,6 +58,25 @@ struct ImportRoutingTests {
         #expect(AIImporter.detect(t) != .geminiNotes)        // header-density guard catches it
     }
 
+    @Test("a verbose Fathom transcript with long multi-line turns still classifies as Fathom (re-audit MED)")
+    func verboseFathomStillDetected() {
+        // 3 bare headers but each turn has several body lines → low header density. Must NOT fall to AI-resolve.
+        let t = """
+        Travis  0:00
+        On Render the GPU spot pricing dropped sharply this week.
+        That materially lowers our inference cost basis.
+        We should lock in capacity before it rebounds.
+        Max  0:30
+        Validators stake to secure the network and earn emissions.
+        The economics depend on how aggressive emissions are this epoch.
+        I'll model a few scenarios and share them.
+        Zade  1:05
+        I shipped the importer last night and it indexes cleanly.
+        Next I'll wire the date-gated search and the tasks view.
+        """
+        #expect(AIImporter.detect(t) == .fathom)
+    }
+
     @Test("single-section notes with stray timecodes route to AI-resolve, not shredded as Fathom (M4)")
     func straySectionTimecodesUnknown() {
         let t = """

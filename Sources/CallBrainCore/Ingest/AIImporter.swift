@@ -55,9 +55,12 @@ public struct AIImporter: Sendable {
 
         // Gemini notes: ≥2 `## ` sections AND headers are a tiny fraction of lines (summary, not transcript).
         if geminiHeaders >= 2 && headerFraction < 0.25 { return .geminiNotes }
-        // Transcripts: a real one is MOSTLY header lines — the fraction guard stops prose w/ stray timecodes.
-        if copyHits >= 3 && headerFraction >= 0.25 { return .firefliesCopy }
-        if fathomHits >= 3 && headerFraction >= 0.25 { return .fathom }
+        // Transcripts: ≥3 timecode headers. No fraction floor here — the tightened regexes already
+        // require the timecode to anchor a header line (end-of-line / paren form), so prose with a stray
+        // mid-sentence timecode doesn't count; and a verbose real transcript with long multi-line turns
+        // (low header density) must still classify deterministically, not fall to AI-resolve (re-audit MED).
+        if copyHits >= 3 { return .firefliesCopy }
+        if fathomHits >= 3 { return .fathom }
         return .unknown
     }
 

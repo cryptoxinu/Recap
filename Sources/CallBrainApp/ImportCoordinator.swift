@@ -139,8 +139,11 @@ final class ImportCoordinator {
 
     /// On launch: a job left in `.running` was interrupted mid-import — requeue it (re-running is
     /// idempotent via content-hash dedupe, so a crash between meeting-commit and job-update self-heals).
+    /// Scans the FULL pending set from the store, not the newest-100 display list (re-audit HIGH: an
+    /// interrupted job beyond the display cap would otherwise stay stuck `.running` forever).
     private func requeueInterrupted() {
-        for job in jobs where job.state == .running {
+        let running = ((try? env.store.pendingImportJobs()) ?? []).filter { $0.state == .running }
+        for job in running {
             var j = job
             if j.payloadKind != nil { j.state = .queued; j.message = nil }
             else { j.state = .failed; j.message = "Interrupted (app closed mid-import)." }
