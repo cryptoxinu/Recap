@@ -597,6 +597,14 @@ public final class Store: @unchecked Sendable {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }
 
+    /// Chunk IDs for a single meeting — the candidate set for meeting-scoped AskFred.
+    public func chunkIDs(meetingID: String) throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT chunk_id FROM transcript_chunks WHERE meeting_id = ? ORDER BY seq",
+                                arguments: [meetingID])
+        }
+    }
+
     /// Chunk IDs whose meeting's date is in [fromYMD, toYMDExclusive) — the hard date-gating candidate
     /// set (Phase 4). `meetings.date` is "YYYY-MM-DD", so an ISO string compare is the correct ordering.
     public func chunkIDs(fromYMD: String, toYMDExclusive: String) throws -> [String] {

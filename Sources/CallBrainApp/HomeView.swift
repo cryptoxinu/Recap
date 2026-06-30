@@ -4,6 +4,7 @@ import CallBrainCore
 struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var meetings: [Store.MeetingRow] = []
+    @State private var chat = ChatModel()
 
     private var greeting: String {
         switch Calendar.current.component(.hour, from: Date()) {
@@ -80,7 +81,7 @@ struct HomeView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
-            AskPanel(compact: true)
+            AskPanel(model: chat, compact: true)
         }
         .frame(width: 372)
         .background(Theme.cardFill.opacity(0.35))

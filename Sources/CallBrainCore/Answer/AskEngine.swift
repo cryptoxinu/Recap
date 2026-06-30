@@ -58,6 +58,23 @@ public struct AskEngine: Sendable {
             candidates = ids
         }
 
+        return try await answer(query, plan: plan, candidates: candidates, topK: topK)
+    }
+
+    /// Ask within a SINGLE meeting (the workspace AskFred). Retrieval is hard-filtered to that call's
+    /// chunks, so every citation lands inside the same transcript (timestamp-linked navigation).
+    public func ask(_ query: String, inMeeting meetingID: String, topK: Int = 8) async throws -> Answer {
+        let plan = QueryPlanner.plan(query)
+        let candidates = try search.store.chunkIDs(meetingID: meetingID)
+        guard !candidates.isEmpty else {
+            return Answer(status: .noSources, text: "This call has no indexed content yet.",
+                          citations: [], provider: nil, model: nil, plan: plan)
+        }
+        return try await answer(query, plan: plan, candidates: candidates, topK: topK)
+    }
+
+    /// Shared core: retrieve over the candidate set → cited, validated answer (or grounded refusal).
+    private func answer(_ query: String, plan: QueryPlan, candidates: [String]?, topK: Int) async throws -> Answer {
         let hits = try await search.hybrid(query, candidateChunkIDs: candidates, finalLimit: topK)
         guard !hits.isEmpty else {
             let scope = plan.dateRange.map { " from \($0.label)" } ?? ""

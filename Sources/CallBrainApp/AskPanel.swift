@@ -21,14 +21,15 @@ struct AskMessage: Identifiable, Equatable {
 
 private struct MeetingRef: Identifiable, Equatable { let id: String; let chunkID: String }
 
-/// The Ask-AI chat — reused full-screen (Ask AI tab) and as the persistent panel on Home.
+/// The Ask-AI chat — reused full-screen (Ask AI tab) and as the persistent panel on Home. Conversation
+/// state + persistence live in a shared `ChatModel` (Phase 4.5), so the same thread can be shown next to
+/// a Recents rail and survive across launches.
 struct AskPanel: View {
     @Environment(AppEnvironment.self) private var env
+    @Bindable var model: ChatModel
     var compact: Bool = false
 
     @State private var query = ""
-    @State private var messages: [AskMessage] = []
-    @State private var busy = false
     @State private var sheet: MeetingRef?
 
     static let suggestions = [
@@ -37,6 +38,9 @@ struct AskPanel: View {
         "What is the status of BitRouter?",
         "What pricing did we decide for amp code?",
     ]
+
+    private var messages: [AskMessage] { model.messages }
+    private var busy: Bool { model.busy }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -96,6 +100,11 @@ struct AskPanel: View {
         }
     }
 
+    private func ask(_ text: String) {
+        let q = text; query = ""
+        Task { await model.ask(q, env) }
+    }
+
     private var inputBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Ask anything across your meetings…", text: $query, axis: .vertical)
@@ -109,43 +118,6 @@ struct AskPanel: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.cardFill))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.hairline))
         .padding(compact ? 12 : 16)
-    }
-
-    private func ask(_ text: String) {
-        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty, !busy else { return }
-        query = ""
-        Task { await run(q) }
-    }
-
-    @MainActor
-    private func run(_ q: String) async {
-        busy = true
-        withAnimation(.snappy) { messages.append(AskMessage(role: .user, text: q, citations: [])) }
-        let pending = AskMessage(role: .assistant, text: "Thinking…", citations: [], pending: true)
-        withAnimation(.snappy) { messages.append(pending) }
-        let pid = pending.id
-        defer { busy = false }
-        do {
-            let ans = try await env.ask.ask(q)
-            let cites = ans.citations.map {
-                Cite(tag: $0.tag, meetingID: $0.meetingID, chunkID: $0.chunkID,
-                     summary: "\($0.speaker ?? "Unknown") — \($0.text.prefix(80))…")
-            }
-            if let i = messages.firstIndex(where: { $0.id == pid }) {
-                withAnimation(.snappy) {
-                    messages[i].text = ans.text
-                    messages[i].citations = cites
-                    messages[i].pending = false
-                    messages[i].status = ans.status == .answered ? "\(cites.count) sources" : "no sources"
-                }
-            }
-        } catch {
-            if let i = messages.firstIndex(where: { $0.id == pid }) {
-                messages[i].text = "Couldn't answer: \(error)"
-                messages[i].pending = false
-            }
-        }
     }
 }
 
