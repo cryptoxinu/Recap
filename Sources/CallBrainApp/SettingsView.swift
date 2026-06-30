@@ -4,6 +4,7 @@ import CallBrainCore
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var primary: ProviderID = .claude
+    @State private var taskReminders = false
 
     var body: some View {
         Form {
@@ -18,6 +19,16 @@ struct SettingsView: View {
                      + "transcript excerpts are sent to the chosen CLI; embeddings, search, and storage stay on your Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Reminders") {
+                Toggle("Daily action-item reminder", isOn: $taskReminders)
+                    .onChange(of: taskReminders) { _, on in
+                        Task { await NotificationManager.setEnabled(on, openTaskCount: env.openTaskCount()) }
+                    }
+                Text("A once-a-day nudge summarizing how many open action items you have across your calls "
+                     + (NotificationManager.available ? "— fires even when CallBrain is closed."
+                        : "(notifications activate in the installed app)."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Local engine") {
                 LabeledContent("Embeddings", value: "nomic-embed-text (Ollama)")
                 LabeledContent("Search", value: "SQLite FTS5 + vector (RRF)")
@@ -29,6 +40,6 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
-        .onAppear { primary = env.providerPrimary }
+        .onAppear { primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled }
     }
 }

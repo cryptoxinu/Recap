@@ -52,6 +52,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 struct RootView: View {
+    @Environment(AppEnvironment.self) private var env
     // Default tab; CALLBRAIN_TAB=<rawValue> opens straight to a tab (used for screenshot QA).
     @State private var selection: SidebarItem? = SidebarItem(
         rawValue: ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] ?? "home") ?? .home
@@ -79,5 +80,6 @@ struct RootView: View {
                 }
             }
         }
+        .task { NotificationManager.refresh(openTaskCount: env.openTaskCount()) }
     }
 }

@@ -81,5 +81,6 @@ final class AppEnvironment {
     }
 
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }
+    func openTaskCount() -> Int { (try? store.openTaskCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }
 }
