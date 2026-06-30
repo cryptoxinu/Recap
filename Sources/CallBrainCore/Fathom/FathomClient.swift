@@ -54,8 +54,11 @@ public struct FathomMeeting: Sendable, Equatable, Identifiable {
 /// Tolerant of key-name variation (id/recording_id, created_at/recording_start_time, etc.) and of
 /// timestamps given as seconds, "HH:MM:SS", or ISO-8601.
 public enum FathomParse {
-    public static func meetings(from data: Data) -> (meetings: [FathomMeeting], nextCursor: String?) {
-        guard let root = try? JSONSerialization.jsonObject(with: data) else { return ([], nil) }
+    /// Returns nil when the body ISN'T valid JSON (a truncated/HTML/error body on a 2xx) — the caller must
+    /// treat that as a retryable error, NOT a fully-drained page, or it could advance the watermark past
+    /// real meetings forever (audit CRITICAL). A genuinely empty-but-valid response returns ([], nil).
+    public static func meetings(from data: Data) -> (meetings: [FathomMeeting], nextCursor: String?)? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) else { return nil }
         let obj = root as? [String: Any]
         let arr = (obj?[firstKey(obj, ["items", "meetings", "data", "results", "recordings"])] as? [[String: Any]])
             ?? (root as? [[String: Any]]) ?? []
@@ -184,7 +187,11 @@ public actor FathomClient {
             if code == 401 || code == 403 { throw FathomError.unauthorized }
             if code == 429 { return FathomPage(meetings: out, nextCursor: cursor, complete: false) }  // resume this page next poll
             guard (200..<300).contains(code) else { throw FathomError.http(code) }
-            let (meetings, next) = FathomParse.meetings(from: data)
+            // A malformed 2xx body is an error, NOT a drained page — return incomplete so the watermark
+            // holds and we retry, rather than skipping meetings (audit CRITICAL).
+            guard let (meetings, next) = FathomParse.meetings(from: data) else {
+                return FathomPage(meetings: out, nextCursor: cursor, complete: false)
+            }
             out += meetings
             pages += 1
             cursor = next

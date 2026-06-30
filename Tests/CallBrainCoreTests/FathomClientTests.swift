@@ -8,7 +8,7 @@ struct FathomClientTests {
     private func data(_ s: String) -> Data { Data(s.utf8) }
 
     @Test("parses the documented /meetings shape: id, title, date, transcript, summary, cursor")
-    func parseDocumented() {
+    func parseDocumented() throws {
         let json = """
         {"items":[
           {"id":"rec_123","title":"Ambient Sync","created_at":"2026-06-30T17:00:00Z",
@@ -19,7 +19,7 @@ struct FathomClientTests {
            ]}
         ],"next_cursor":"abc"}
         """
-        let (meetings, cursor) = FathomParse.meetings(from: data(json))
+        let (meetings, cursor) = try #require(FathomParse.meetings(from: data(json)))
         #expect(cursor == "abc")
         #expect(meetings.count == 1)
         let m = meetings[0]
@@ -34,14 +34,14 @@ struct FathomClientTests {
     }
 
     @Test("tolerates alternate key names (recording_id, content) + nested speaker")
-    func parseAlternateKeys() {
+    func parseAlternateKeys() throws {
         let json = """
         {"meetings":[
           {"recording_id":"r9","meeting_title":"Quick chat","recording_start_time":1782800000,
            "transcript":[{"speaker":{"name":"Ghazal"},"content":"Hi","start":12.5}]}
         ]}
         """
-        let (meetings, cursor) = FathomParse.meetings(from: data(json))
+        let (meetings, cursor) = try #require(FathomParse.meetings(from: data(json)))
         #expect(cursor == nil)
         #expect(meetings.first?.id == "r9")
         #expect(meetings.first?.title == "Quick chat")
@@ -50,21 +50,21 @@ struct FathomClientTests {
     }
 
     @Test("a bare array (no wrapper object) still parses")
-    func parseBareArray() {
+    func parseBareArray() throws {
         let json = #"[{"id":"x","title":"T","transcript":[{"speaker":"A","text":"hello"}]}]"#
-        let (meetings, _) = FathomParse.meetings(from: data(json))
+        let (meetings, _) = try #require(FathomParse.meetings(from: data(json)))
         #expect(meetings.count == 1)
         #expect(meetings[0].lines.first?.text == "hello")
         #expect(meetings[0].lines.first?.tStart == 0)   // missing timestamp → 0
     }
 
-    @Test("garbage / empty input degrades to empty, never crashes")
-    func parseGarbage() {
-        #expect(FathomParse.meetings(from: data("not json")).meetings.isEmpty)
-        #expect(FathomParse.meetings(from: data("{}")).meetings.isEmpty)
-        #expect(FathomParse.meetings(from: Data()).meetings.isEmpty)
+    @Test("malformed (non-JSON) input returns nil so the caller retries; valid-empty returns empty")
+    func parseGarbage() throws {
+        #expect(FathomParse.meetings(from: data("not json")) == nil)   // malformed → nil (retryable)
+        #expect(FathomParse.meetings(from: Data()) == nil)
+        #expect(FathomParse.meetings(from: data("{}"))?.meetings.isEmpty == true)   // valid-empty → []
         // a meeting with no id is dropped; a line with no text is dropped
-        let (m, _) = FathomParse.meetings(from: data(#"{"items":[{"title":"no id"},{"id":"ok","transcript":[{"speaker":"A"}]}]}"#))
+        let (m, _) = try #require(FathomParse.meetings(from: data(#"{"items":[{"title":"no id"},{"id":"ok","transcript":[{"speaker":"A"}]}]}"#)))
         #expect(m.count == 1 && m[0].id == "ok" && m[0].lines.isEmpty)
     }
 

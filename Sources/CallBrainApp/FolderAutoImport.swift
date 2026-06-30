@@ -56,16 +56,24 @@ final class FolderAutoImport {
     private func rescan() {
         guard let folderPath else { return }
         let recognized = IngestEngine.readableExtensions.union(ImportCoordinator.mediaExtensions)
-        let found = FolderScanner.importableFiles(in: URL(fileURLWithPath: folderPath), recognized: recognized)
-        var seenArr = UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? []
-        let seen = Set(seenArr)
-        let fresh = found.filter { !seen.contains($0.path) }
-        guard !fresh.isEmpty else { return }
-        let n = env.importCoordinator.enqueueFiles(fresh)
-        seenArr.append(contentsOf: fresh.map(\.path))
-        if seenArr.count > Self.seenCap { seenArr = Array(seenArr.suffix(Self.seenCap)) }   // keep most recent (SME L8)
-        UserDefaults.standard.set(seenArr, forKey: Self.seenKey)
-        importedCount += n
+        Task { [weak self] in
+            // Walk the folder OFF the main thread so a big drop never freezes the UI.
+            let found = await Task.detached {
+                FolderScanner.importableFiles(in: URL(fileURLWithPath: folderPath), recognized: recognized)
+            }.value
+            guard let self else { return }
+            var seenArr = UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? []
+            let seen = Set(seenArr)
+            let fresh = found.filter { !seen.contains($0.path) }
+            guard !fresh.isEmpty else { return }
+            // Mark seen ONLY the files that actually queued — a failed import must stay retryable, never
+            // get permanently skipped (audit HIGH).
+            let queued = self.env.importCoordinator.enqueueFilesReturningQueued(fresh)
+            seenArr.append(contentsOf: queued.map(\.path))
+            if seenArr.count > Self.seenCap { seenArr = Array(seenArr.suffix(Self.seenCap)) }   // keep most recent
+            UserDefaults.standard.set(seenArr, forKey: Self.seenKey)
+            self.importedCount += queued.count
+        }
     }
 }
 
