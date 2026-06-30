@@ -46,6 +46,49 @@ public struct IngestEngine: Sendable {
         return (outcome, resolved)
     }
 
+    /// Drag-and-drop / file-open import (Phase 2): read the file's text natively (`.docx` via
+    /// `DocxReader`, everything else as UTF-8), seed title/date from the filename, then route through
+    /// the same detect→parse→AI-resolve pipeline as paste. One entry point for every on-disk source.
+    public func ingestFile(at url: URL, importer: AIImporter,
+                           generateTitleIfMissing: Bool = true) async throws -> (Outcome, AIImporter.Resolved) {
+        let text = try Self.readText(at: url)
+        let meta = Self.filenameMeta(url)
+        let resolved = try await importer.resolve(text, generateTitleIfMissing: generateTitleIfMissing,
+                                                  titleHint: meta.title, dateHint: meta.date)
+        let outcome = try await ingest(resolved.transcript)
+        return (outcome, resolved)
+    }
+
+    /// Extensions this engine can read off disk (used by the drop target to accept/reject files).
+    public static let readableExtensions: Set<String> = ["docx", "txt", "md", "json", "srt", "vtt"]
+
+    static func readText(at url: URL) throws -> String {
+        if url.pathExtension.lowercased() == "docx" { return try DocxReader.read(url: url) }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Best-effort title + date from a filename like
+    /// `morning sync - 2026_06_29 09_29 PDT - Notes by Gemini (1).docx` → ("morning sync", "2026-06-29").
+    static func filenameMeta(_ url: URL) -> (title: String?, date: String?) {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ns = stem as NSString
+
+        var date: String?
+        if let re = try? NSRegularExpression(pattern: #"(\d{4})[-_](\d{2})[-_](\d{2})"#),
+           let m = re.firstMatch(in: stem, range: NSRange(location: 0, length: ns.length)) {
+            date = "\(ns.substring(with: m.range(at: 1)))-\(ns.substring(with: m.range(at: 2)))-\(ns.substring(with: m.range(at: 3)))"
+        }
+
+        var title = stem
+        if let r = stem.range(of: #"\s*[-–]\s*\d{4}[-_]\d{2}[-_]\d{2}"#, options: .regularExpression) {
+            title = String(stem[..<r.lowerBound])              // everything before " - 2026_06_29"
+        } else if let dash = stem.range(of: " - ") {
+            title = String(stem[..<dash.lowerBound])
+        }
+        title = title.trimmingCharacters(in: .whitespaces)
+        return (title.isEmpty ? nil : title, date)
+    }
+
     /// Persist a parsed transcript end-to-end and return what landed.
     public func ingest(_ parsed: ParsedTranscript) async throws -> Outcome {
         let meetingID = "m_" + UUID().uuidString

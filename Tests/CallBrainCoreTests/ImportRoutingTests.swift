@@ -1,0 +1,95 @@
+import Testing
+import Foundation
+@testable import CallBrainCore
+
+@Suite("Import routing (detect → parse, filename meta, file ingest)")
+struct ImportRoutingTests {
+
+    private static let realDocx =
+        "/Users/z/CallBrain/data/raw/google_meet_recordings/morning sync - 2026_06_29 09_29 PDT - Notes by Gemini (1).docx"
+
+    // MARK: detection
+
+    @Test("Gemini notes (## sections, no timestamps) detected as geminiNotes")
+    func detectsGemini() {
+        let notes = """
+        morning sync
+        Jun 29, 2026
+        ## Community and analytics
+        Zade implemented Discord scrapers.
+        ## Revenue and billing
+        Need a central cost endpoint.
+        """
+        #expect(AIImporter.detect(notes) == .geminiNotes)
+    }
+
+    @Test("a timestamped transcript is NOT misread as Gemini notes")
+    func transcriptNotGemini() {
+        // Fireflies copy: `Name: H:MM:SS` headers — must win over the gemini heuristic.
+        let copy = """
+        Travis Good: 0:00:04
+        On Render the GPU spot pricing dropped sharply.
+        Max Lang: 0:00:21
+        Validators stake to secure the network.
+        Zade Kal: 0:00:38
+        I shipped the importer last night.
+        """
+        #expect(AIImporter.detect(copy) == .firefliesCopy)
+    }
+
+    @Test("prose with no headers and no timestamps stays unknown (→ AI resolve)")
+    func proseUnknown() {
+        #expect(AIImporter.detect("just some freeform notes about a call, nothing structured here") == .unknown)
+    }
+
+    // MARK: filename metadata
+
+    @Test("filenameMeta parses the real Gemini export name")
+    func filenameMetaGemini() {
+        let url = URL(fileURLWithPath: "/x/morning sync - 2026_06_29 09_29 PDT - Notes by Gemini (1).docx")
+        let meta = IngestEngine.filenameMeta(url)
+        #expect(meta.title == "morning sync")
+        #expect(meta.date == "2026-06-29")
+    }
+
+    @Test("filenameMeta handles dash-date and bare names")
+    func filenameMetaVariants() {
+        #expect(IngestEngine.filenameMeta(URL(fileURLWithPath: "/x/Weekly Standup - 2026-05-14.txt")).title == "Weekly Standup")
+        #expect(IngestEngine.filenameMeta(URL(fileURLWithPath: "/x/Weekly Standup - 2026-05-14.txt")).date == "2026-05-14")
+        let bare = IngestEngine.filenameMeta(URL(fileURLWithPath: "/x/random-dump.txt"))
+        #expect(bare.date == nil)
+        #expect(bare.title == "random-dump")     // no " - " → whole stem
+    }
+
+    // MARK: end-to-end file ingest (deterministic: StubEmbedder + no-LLM path)
+
+    @Test("LIVE: ingestFile(real .docx) → titled, dated Gemini meeting with notes",
+          .enabled(if: FileManager.default.fileExists(atPath: ImportRoutingTests.realDocx)))
+    func ingestRealDocx() async throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cb-imp-\(UUID().uuidString).sqlite").path
+        let store = try Store(path: path)
+        let engine = IngestEngine(store: store, embedder: StubEmbedder(), space: "stub__v1")
+        // titleHint from filename means the no-op title path is taken → LLM never invoked.
+        let importer = AIImporter(llm: ClaudeRunner(executablePath: "/nonexistent/claude",
+                                                    sandboxDir: FileManager.default.temporaryDirectory.path))
+
+        let (outcome, resolved) = try await engine.ingestFile(
+            at: URL(fileURLWithPath: Self.realDocx), importer: importer)
+
+        #expect(resolved.format == .geminiNotes)
+        #expect(resolved.usedAI == false)
+        #expect(resolved.transcript.source == .gmeetGemini)
+        #expect(outcome.chunkCount > 0)
+        #expect(outcome.embedded == outcome.chunkCount)
+
+        let meeting = try store.meeting(id: outcome.meetingID)
+        #expect(meeting?.title == "morning sync")
+        #expect(meeting?.date == "2026-06-29")
+
+        let utts = try store.utterances(meetingID: outcome.meetingID)
+        #expect(utts.count > 5)
+        #expect(utts.allSatisfy { $0.speaker == "Gemini Notes" })
+        #expect(utts.contains { $0.text.contains("BitRouter") })
+    }
+}

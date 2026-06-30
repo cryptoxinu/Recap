@@ -14,7 +14,7 @@ public struct AIImporter: Sendable {
     public init(llm: ClaudeRunner) { self.llm = llm }
 
     public enum Format: String, Sendable, Equatable {
-        case firefliesJSON, firefliesCopy, fathom, unknown
+        case firefliesJSON, firefliesCopy, fathom, geminiNotes, unknown
     }
 
     public struct Resolved: Sendable, Equatable {
@@ -31,7 +31,8 @@ public struct AIImporter: Sendable {
         pattern: #"(?m)^\s*.{1,40}?(\s+\d{1,2}:\d{2}(?::\d{2})?|\(\d{1,2}:\d{2}(?::\d{2})?\))\s*:?\s*.*$"#)
 
     /// Classify by counting strong format signals (≥3 header matches) so the permissive parsers can't
-    /// grab random prose.
+    /// grab random prose. Timestamped transcript formats are checked BEFORE Gemini notes (a transcript
+    /// never wins on `##`-header count; notes never win on per-line `Speaker: 0:00` headers).
     public static func detect(_ raw: String) -> Format {
         let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.hasPrefix("{") || t.hasPrefix("[") {
@@ -39,36 +40,63 @@ public struct AIImporter: Sendable {
                 return .firefliesJSON
             }
         }
+        // Gemini's `## ` section structure is a far more specific signal than the permissive Fathom
+        // header regex, so it is checked first — a timestamped transcript never carries `## ` headers,
+        // and Gemini notes never carry `Speaker: 0:00` headers, so the two can't steal each other.
+        if looksLikeGeminiNotes(t) { return .geminiNotes }
         let full = NSRange(location: 0, length: (raw as NSString).length)
         if copyHeaderRE.numberOfMatches(in: raw, range: full) >= 3 { return .firefliesCopy }
         if fathomHeaderRE.numberOfMatches(in: raw, range: full) >= 3 { return .fathom }
         return .unknown
     }
 
+    /// Gemini "Notes by Gemini" = a structured SUMMARY: ≥2 `## ` section headers (DocxReader emits them)
+    /// and NO per-line `Speaker: 0:00` timestamp headers. That combination is unique to the notes export.
+    static func looksLikeGeminiNotes(_ t: String) -> Bool {
+        let headers = t.components(separatedBy: "\n").filter { $0.hasPrefix("## ") }.count
+        guard headers >= 2 else { return false }
+        let full = NSRange(location: 0, length: (t as NSString).length)
+        return copyHeaderRE.numberOfMatches(in: t, range: full) == 0
+    }
+
     // MARK: - resolve
 
-    public func resolve(_ raw: String, generateTitleIfMissing: Bool = true) async throws -> Resolved {
+    /// Resolve a raw dump into a structured, named meeting. `titleHint`/`dateHint` come from the source
+    /// filename (e.g. "morning sync - 2026_06_29 … Notes by Gemini.docx") and seed any parser that lacks
+    /// in-band metadata (Gemini notes carry no machine-readable title/date of their own).
+    public func resolve(_ raw: String, generateTitleIfMissing: Bool = true,
+                        titleHint: String? = nil, dateHint: String? = nil) async throws -> Resolved {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ParseError.empty }
 
         switch Self.detect(trimmed) {
         case .firefliesJSON:
             return try await finalize(FirefliesParser.parse(Data(trimmed.utf8)), .firefliesJSON, raw: trimmed,
-                                      shouldGenerateTitle: generateTitleIfMissing)
+                                      shouldGenerateTitle: generateTitleIfMissing, titleHint: titleHint, dateHint: dateHint)
         case .firefliesCopy:
             return try await finalize(FirefliesCopyParser.parse(trimmed), .firefliesCopy, raw: trimmed,
-                                      shouldGenerateTitle: generateTitleIfMissing)
+                                      shouldGenerateTitle: generateTitleIfMissing, titleHint: titleHint, dateHint: dateHint)
         case .fathom:
             return try await finalize(FathomParser.parse(trimmed), .fathom, raw: trimmed,
-                                      shouldGenerateTitle: generateTitleIfMissing)
+                                      shouldGenerateTitle: generateTitleIfMissing, titleHint: titleHint, dateHint: dateHint)
+        case .geminiNotes:
+            // A summary, not a transcript: route to the notes parser, seeded with filename title/date.
+            let parsed = try GeminiNotesParser.parse(trimmed, title: titleHint, date: dateHint)
+            return try await finalize(parsed, .geminiNotes, raw: trimmed,
+                                      shouldGenerateTitle: generateTitleIfMissing, titleHint: titleHint, dateHint: dateHint)
         case .unknown:
-            return Resolved(transcript: try await aiResolve(trimmed), format: .unknown, usedAI: true)
+            var p = try await aiResolve(trimmed)
+            if let titleHint, p.title == nil || p.title == "Imported call" { p.title = titleHint }
+            if let dateHint, p.date == nil { p.date = dateHint }
+            return Resolved(transcript: p, format: .unknown, usedAI: true)
         }
     }
 
     private func finalize(_ parsed: ParsedTranscript, _ fmt: Format, raw: String,
-                          shouldGenerateTitle: Bool) async throws -> Resolved {
+                          shouldGenerateTitle: Bool, titleHint: String? = nil, dateHint: String? = nil) async throws -> Resolved {
         var p = parsed
+        if let dateHint, p.date == nil { p.date = dateHint }
+        if (p.title?.isEmpty ?? true), let titleHint, !titleHint.isEmpty { p.title = titleHint }
         if shouldGenerateTitle, (p.title?.isEmpty ?? true) {
             p.title = (try? await generateTitle(forSpeakers: p.speakers, sample: raw)) ?? defaultTitle(p)
         }

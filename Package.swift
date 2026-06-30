@@ -21,11 +21,16 @@ let package = Package(
         // SQLite (WAL + FTS5) source of truth. sqlite-vec/usearch graduate later; the V1 vector
         // lane stores embeddings as BLOBs and does exact brute-force cosine in Swift (docs §0 D5/D6).
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        // Native Swift ZIP reading for .docx (Google Meet "Notes by Gemini") — replaces the python extract.
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0"),
     ],
     targets: [
         .target(
             name: "CallBrainCore",
-            dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
