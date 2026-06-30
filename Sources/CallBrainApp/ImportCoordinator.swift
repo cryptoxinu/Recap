@@ -80,7 +80,15 @@ final class ImportCoordinator {
     private func startDraining() {
         guard !processing else { return }
         processing = true
-        Task { await drain(); processing = false }
+        // Defeat App Nap + idle sleep while importing/transcribing so jobs finish even if the user steps
+        // away or closes the window (Phase 6). The token is released when the queue drains.
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled], reason: "Importing calls")
+        Task {
+            await drain()
+            processing = false
+            ProcessInfo.processInfo.endActivity(activity)
+        }
     }
 
     private func drain() async {

@@ -8,7 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Closing the window leaves CallBrain alive in the menu bar (so background imports/transcriptions
+    // keep running); the user quits explicitly via ⌘Q or the menu-bar Quit (Phase 6).
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 @main
@@ -17,12 +19,38 @@ struct CallBrainApp: App {
     @State private var env = AppEnvironment()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView()
                 .environment(env)
                 .frame(minWidth: 1040, minHeight: 700)
         }
         .windowToolbarStyle(.unified)
+
+        MenuBarExtra("CallBrain", systemImage: "waveform.circle.fill") {
+            MenuBarView().environment(env)
+        }
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+/// Menu-bar status + quick actions; shows live import/transcription progress even when the window is
+/// closed, so the founder can see background jobs are still running (Phase 6).
+struct MenuBarView: View {
+    @Environment(AppEnvironment.self) private var env
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        let active = env.importCoordinator.jobs.filter { $0.state == .running || $0.state == .queued }.count
+        let open = env.openTaskCount()
+        if active > 0 {
+            Text("Importing \(active) item\(active == 1 ? "" : "s")…")
+        } else {
+            Text("CallBrain — \(env.meetingCount()) calls")
+        }
+        if open > 0 { Text("\(open) open action item\(open == 1 ? "" : "s")") }
+        Divider()
+        Button("Open CallBrain") { NSApp.activate(ignoringOtherApps: true); openWindow(id: "main") }
+        Button("Quit CallBrain") { NSApp.terminate(nil) }
     }
 }
 
