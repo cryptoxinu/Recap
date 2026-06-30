@@ -100,8 +100,12 @@ sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
   3/3: citation precision, no out-of-window leak, grounded refusal, dangling-tag check), 5 ask modes.
   Gate: 3 HIGH+3 MED all fixed (`docs/audits/phase4-audit.md`). Deferred-not-creep: transcript LLM
   action-items, explanatory-rerank, company/pre-post-call templates. (104 tests green.)
-**Phase 4.5 — ▶ IN PROGRESS:** conversation-persistence backbone built (conversations+messages v7).
-  NEXT: wire AskPanel to persist + Recents rail; Notes|Transcript meeting workspace + docked AskFred.
+**Phase 4.5 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** the full Fireflies vision — Notes|Transcript
+  **meeting workspace** + **docked AskFred** (per-call scoped), durable **conversation history / Recents**
+  (revisit/rename/delete), live **agentic reasoning timeline** (real pipeline steps → collapsible
+  disclosure), clean **transcript reader + Find bar** + **timestamp-linked citations**. ALL screenshot-
+  verified on real-style data. Gate: 1 HIGH+2 MED+1 LOW fixed (`docs/audits/phase4.5-audit.md`).
+  Deferred-not-creep: AI Notes-summary for transcript meetings, sync-to-audio (fold into Phase 3). (106 green.)
 **Phase 4.5** — **Fireflies-grade meeting workspace & conversational intelligence** (founder direction 2026-06-30,
   3 ref screenshots in DESIGN §"Meeting workspace & AskFred"): Notes|Transcript tabbed meeting view + docked
   AskFred chat; sectioned notes with clickable `[MM:SS]` → clean transcript reader (Find bar, speaker grouping,
