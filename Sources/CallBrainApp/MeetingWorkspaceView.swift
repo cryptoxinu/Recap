@@ -8,6 +8,7 @@ struct MeetingWorkspaceView: View {
     @Environment(AppEnvironment.self) private var env
     let meetingID: String
     @State private var chat: ChatModel
+    @State private var focusChunkID: String?     // citation tap → scroll the transcript pane
 
     init(meetingID: String) {
         self.meetingID = meetingID
@@ -16,7 +17,7 @@ struct MeetingWorkspaceView: View {
 
     var body: some View {
         HSplitView {
-            MeetingDetailView(meetingID: meetingID)
+            MeetingDetailView(meetingID: meetingID, highlightChunkID: focusChunkID)
                 .frame(minWidth: 460, idealWidth: 720)
             askFred
                 .frame(minWidth: 320, idealWidth: 380, maxWidth: 520)
@@ -38,7 +39,11 @@ struct MeetingWorkspaceView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 12)
             Divider()
-            AskPanel(model: chat, compact: true)
+            AskPanel(model: chat, compact: true, onCite: { cite in
+                // Same-citation re-tap still re-scrolls: clear then set so onChange fires.
+                focusChunkID = nil
+                DispatchQueue.main.async { focusChunkID = cite.chunkID }
+            })
         }
         .background(Theme.cardFill.opacity(0.35))
     }

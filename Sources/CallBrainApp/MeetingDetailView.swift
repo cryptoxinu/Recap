@@ -4,6 +4,8 @@ import CallBrainCore
 struct MeetingDetailView: View {
     @Environment(AppEnvironment.self) private var env
     let meetingID: String
+    /// A cited chunk to scroll to + flash. Dynamic: when the parent (the workspace) changes it on a
+    /// citation tap, the transcript scrolls to the matching turn (timestamp-linked navigation).
     var highlightChunkID: String? = nil
 
     @State private var meeting: Store.MeetingRow?
@@ -11,6 +13,11 @@ struct MeetingDetailView: View {
     @State private var noteLines: [String] = []      // populated for Gemini-notes meetings
     @State private var people: [Entity] = []         // native-NER people mentioned
     @State private var highlightGroupID: Int?
+
+    // Find-in-transcript
+    @State private var findActive = false
+    @State private var findText = ""
+    @State private var matchIndex = 0
 
     private var isNotes: Bool { meeting?.source == "gmeet_gemini" }
 
@@ -20,35 +27,92 @@ struct MeetingDetailView: View {
         let tStart: Double?
         let isInferred: Bool
         var lines: [String]
+        var joined: String { lines.joined(separator: " ") }
+    }
+
+    /// Group ids matching the find query (transcript), in order.
+    private var matches: [Int] {
+        let q = findText.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return [] }
+        return groups.filter { $0.joined.lowercased().contains(q) || $0.speaker.lowercased().contains(q) }.map(\.id)
     }
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                    Divider()
-                    if isNotes {
-                        GeminiNotesView(lines: noteLines, title: meeting?.title)
-                    } else {
-                        LazyVStack(alignment: .leading, spacing: 16) {
-                            ForEach(groups) { turn($0).id($0.id) }
+            VStack(spacing: 0) {
+                if findActive { findBar(proxy) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+                        Divider()
+                        if isNotes {
+                            GeminiNotesView(lines: noteLines, title: meeting?.title, highlight: findText)
+                        } else {
+                            LazyVStack(alignment: .leading, spacing: 16) {
+                                ForEach(groups) { turn($0).id($0.id) }
+                            }
                         }
                     }
+                    .padding(28)
+                    .frame(maxWidth: 860, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(28)
-                .frame(maxWidth: 860, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .task {
                 await load()
-                if let h = highlightGroupID {
-                    try? await Task.sleep(for: .milliseconds(120))
-                    withAnimation(.easeInOut) { proxy.scrollTo(h, anchor: .center) }
+                // Screenshot QA: CALLBRAIN_FIND=<query> opens the Find bar pre-filled.
+                if let f = ProcessInfo.processInfo.environment["CALLBRAIN_FIND"], !f.isEmpty {
+                    findActive = true; findText = f
+                    if let first = matches.first { scrollTo(first, proxy) }
                 }
+                await scrollToHighlight(proxy)
+            }
+            .onChange(of: highlightChunkID) { _, _ in
+                Task { recomputeHighlight(); await scrollToHighlight(proxy) }
             }
         }
         .navigationTitle(meeting?.title ?? "Meeting")
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button { withAnimation(.snappy) { findActive.toggle() } } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .help("Find in transcript")
+            }
+        }
+    }
+
+    private func findBar(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Find in transcript…", text: $findText)
+                .textFieldStyle(.plain)
+                .onSubmit { jump(+1, proxy) }
+                .onChange(of: findText) { _, _ in matchIndex = 0; if let f = matches.first { scrollTo(f, proxy) } }
+            if !matches.isEmpty {
+                Text("\(min(matchIndex + 1, matches.count)) / \(matches.count)")
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Button { jump(-1, proxy) } label: { Image(systemName: "chevron.up") }.buttonStyle(.plain)
+                Button { jump(+1, proxy) } label: { Image(systemName: "chevron.down") }.buttonStyle(.plain)
+            } else if !findText.isEmpty {
+                Text("No matches").font(.caption).foregroundStyle(.secondary)
+            }
+            Button { withAnimation(.snappy) { findActive = false; findText = "" } } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Theme.cardFill)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func jump(_ dir: Int, _ proxy: ScrollViewProxy) {
+        guard !matches.isEmpty else { return }
+        matchIndex = ((matchIndex + dir) % matches.count + matches.count) % matches.count
+        scrollTo(matches[matchIndex], proxy)
+    }
+
+    private func scrollTo(_ id: Int, _ proxy: ScrollViewProxy) {
+        withAnimation(.easeInOut) { proxy.scrollTo(id, anchor: .center) }
     }
 
     private var header: some View {
@@ -76,7 +140,9 @@ struct MeetingDetailView: View {
     }
 
     private func turn(_ g: TurnGroup) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let isMatch = !findText.isEmpty && matches.contains(g.id)
+        let isCurrentMatch = isMatch && matches.indices.contains(matchIndex) && matches[matchIndex] == g.id
+        return HStack(alignment: .top, spacing: 12) {
             avatar(g.speaker)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
@@ -98,8 +164,16 @@ struct MeetingDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10)
-            .fill(g.id == highlightGroupID ? Theme.accent.opacity(0.12) : .clear))
+        .background(RoundedRectangle(cornerRadius: 10).fill(turnFill(g.id, isMatch: isMatch, isCurrent: isCurrentMatch)))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(isCurrentMatch ? Color.yellow.opacity(0.7) : .clear, lineWidth: 1.5))
+    }
+
+    private func turnFill(_ id: Int, isMatch: Bool, isCurrent: Bool) -> Color {
+        if id == highlightGroupID { return Theme.accent.opacity(0.14) }
+        if isCurrent { return Color.yellow.opacity(0.18) }
+        if isMatch { return Color.yellow.opacity(0.08) }
+        return .clear
     }
 
     private func avatar(_ name: String) -> some View {
@@ -134,13 +208,30 @@ struct MeetingDetailView: View {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
     }
 
+    private func scrollToHighlight(_ proxy: ScrollViewProxy) async {
+        guard let h = highlightGroupID else { return }
+        try? await Task.sleep(for: .milliseconds(120))
+        withAnimation(.easeInOut) { proxy.scrollTo(h, anchor: .center) }
+    }
+
+    /// Map the cited chunk to a transcript group (best-effort text match).
+    private func recomputeHighlight() {
+        guard let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first else {
+            highlightGroupID = nil; return
+        }
+        let needle = String(hit.text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { highlightGroupID = nil; return }
+        highlightGroupID = groups.first(where: { g in
+            g.lines.contains(where: { $0.contains(needle) || needle.contains($0.prefix(30)) })
+        })?.id
+    }
+
     private func load() async {
         if let m = try? env.store.meeting(id: meetingID) { meeting = m }
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
         if meeting?.source == "gmeet_gemini" {
             noteLines = utts.map(\.text)
         } else {
-            // People mentioned (native NER) — only for transcripts; notes already list participants.
             people = ((try? env.store.entities(meetingID: meetingID)) ?? [])
                 .filter { $0.kind == .person && $0.count >= 2 }.prefix(10).map { $0 }
         }
@@ -161,13 +252,6 @@ struct MeetingDetailView: View {
             }
         }
         groups = result
-
-        // Best-effort: find the group matching the cited chunk to scroll/highlight.
-        if let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first {
-            let needle = String(hit.text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !needle.isEmpty {
-                highlightGroupID = result.first(where: { g in g.lines.contains(where: { $0.contains(needle) || needle.contains($0.prefix(30)) }) })?.id
-            }
-        }
+        recomputeHighlight()
     }
 }

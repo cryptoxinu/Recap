@@ -7,6 +7,12 @@ import CallBrainCore
 struct GeminiNotesView: View {
     let lines: [String]
     var title: String? = nil
+    var highlight: String = ""           // Find-in-notes: tint matching points
+
+    private func matches(_ s: String) -> Bool {
+        let q = highlight.trimmingCharacters(in: .whitespaces).lowercased()
+        return !q.isEmpty && s.lowercased().contains(q)
+    }
 
     private struct Section: Identifiable { let id: Int; let title: String?; var points: [String] }
 
@@ -111,6 +117,8 @@ struct GeminiNotesView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(.vertical, 1).padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 5).fill(matches(clean) ? Color.yellow.opacity(0.18) : .clear))
     }
 
     /// `[Owner] rest` → an accent owner chip + the text; otherwise plain.

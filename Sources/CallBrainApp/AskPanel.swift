@@ -29,6 +29,9 @@ struct AskPanel: View {
     @Environment(AppEnvironment.self) private var env
     @Bindable var model: ChatModel
     var compact: Bool = false
+    /// When set (the meeting workspace), a citation tap calls this (scroll the transcript pane) instead
+    /// of opening a sheet.
+    var onCite: ((Cite) -> Void)? = nil
 
     @State private var query = ""
     @State private var sheet: MeetingRef?
@@ -96,7 +99,9 @@ struct AskPanel: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(messages) { m in
-                        AskMessageView(message: m, onTapCite: { c in sheet = MeetingRef(id: c.meetingID, chunkID: c.chunkID) })
+                        AskMessageView(message: m, onTapCite: { c in
+                            if let onCite { onCite(c) } else { sheet = MeetingRef(id: c.meetingID, chunkID: c.chunkID) }
+                        })
                             .id(m.id)
                     }
                 }
