@@ -5,7 +5,9 @@ import CallBrainCore
 /// `Diarizer` backed by FluidAudio (on-device speaker segmentation). Models download on first use and
 /// cache. Raw speaker ids are remapped to friendly "Speaker 1/2/…" in first-seen order.
 public final class FluidAudioDiarizer: CallBrainCore.Diarizer, @unchecked Sendable {
-    private var manager: DiarizerManager?   // confined: diarizes one recording at a time
+    // Lock-guarded one-shot init Task (Codex P3 gate MED) — safe to cache + reuse one instance.
+    private let lock = NSLock()
+    private var loadTask: Task<Box<DiarizerManager>, Error>?
 
     public init() {}
 
@@ -25,15 +27,19 @@ public final class FluidAudioDiarizer: CallBrainCore.Diarizer, @unchecked Sendab
     }
 
     private func ensure() async throws -> DiarizerManager {
-        if let manager { return manager }
-        do {
-            let models = try await DiarizerModels.downloadIfNeeded()
-            let m = DiarizerManager()
-            m.initialize(models: models)
-            manager = m
-            return m
-        } catch {
-            throw TranscribeError.modelUnavailable("FluidAudio diarizer: \(error.localizedDescription)")
+        let task: Task<Box<DiarizerManager>, Error> = lock.withLock {
+            if let t = loadTask { return t }
+            let t = Task { () throws -> Box<DiarizerManager> in
+                do {
+                    let models = try await DiarizerModels.downloadIfNeeded()
+                    let m = DiarizerManager()
+                    m.initialize(models: models)
+                    return Box(m)
+                } catch { throw TranscribeError.modelUnavailable("FluidAudio diarizer: \(error.localizedDescription)") }
+            }
+            loadTask = t
+            return t
         }
+        return try await task.value.value
     }
 }

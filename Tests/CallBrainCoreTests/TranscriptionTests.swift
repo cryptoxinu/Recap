@@ -40,9 +40,20 @@ struct TranscriptionTests {
         #expect(utts.count == 2)                                   // first two merged
         #expect(utts[0].speakerRaw == "Speaker 1")
         #expect(utts[0].text == "Hello everyone. Let's start.")
-        #expect(utts[0].isInferredSpeaker == false)
+        // Diarized "Speaker N" labels + model timestamps are inferred/derived per CTM (gate fix).
+        #expect(utts[0].isInferredSpeaker == true)
+        #expect(utts[0].tsConfidence == .derived)
         #expect(utts[1].speakerRaw == "Speaker 2")
         #expect(utts[1].text == "Sounds good.")
+    }
+
+    @Test("a segment in a long gap is NOT attributed to a far speaker (max-gap; gate MED)")
+    func maxGapFallback() {
+        let speakers = [SpeakerSegment(speaker: "Speaker 1", tStart: 0, tEnd: 5)]
+        // a segment at 60s — 55s after the only speaker turn → must fall back, not attribute to Speaker 1
+        #expect(SpeakerAligner.speakerFor(midpoint: 60, in: speakers) == nil)
+        // a segment 1s after the turn → within max-gap → attributed
+        #expect(SpeakerAligner.speakerFor(midpoint: 5.5, in: speakers) == "Speaker 1")
     }
 
     @Test("no diarization → single inferred speaker")
@@ -67,13 +78,15 @@ struct TranscriptionTests {
             diarizer: StubDiarizer(speakers: [SpeakerSegment(speaker: "Speaker 1", tStart: 0, tEnd: 1)]))
 
         let box = StageBox()
-        let parsed = try await pipeline.run(url: url, title: "Recorded standup", date: "2026-06-30") { stage, _ in
+        let out = try await pipeline.run(url: url, title: "Recorded standup", date: "2026-06-30") { stage, _ in
             box.add(stage)
         }
         let stages = box.snapshot()
-        #expect(parsed.source == .gmeetLocal)
-        #expect(parsed.title == "Recorded standup")
-        #expect(parsed.utterances.first?.text == "Hi there.")
+        #expect(out.transcript.source == .gmeetLocal)
+        #expect(out.transcript.title == "Recorded standup")
+        #expect(out.transcript.utterances.first?.text == "Hi there.")
+        #expect(out.diarizationRequested == true)
+        #expect(out.diarizationSucceeded == true)
         #expect(stages.contains(.decoding) && stages.contains(.transcribing) && stages.contains(.finishing))
     }
 

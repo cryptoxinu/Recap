@@ -52,9 +52,12 @@ final class AppEnvironment {
     var ingest: IngestEngine { IngestEngine(store: store, embedder: embedder, space: space) }
     var importer: AIImporter { AIImporter(llm: llm) }
     /// On-device transcription (Phase 3): WhisperKit + FluidAudio behind the Core protocols. `base`
-    /// balances speed/accuracy; the model downloads + compiles on first use, then loads instantly.
+    /// balances speed/accuracy. The adapters are CACHED (created once) so the model loads a single time
+    /// and is reused across recordings — their lock-guarded init makes shared reuse safe.
+    private let _transcriber = WhisperKitTranscriber(model: "base")
+    private let _diarizer = FluidAudioDiarizer()
     var transcription: TranscriptionPipeline {
-        TranscriptionPipeline(transcriber: WhisperKitTranscriber(model: "base"), diarizer: FluidAudioDiarizer())
+        TranscriptionPipeline(transcriber: _transcriber, diarizer: _diarizer)
     }
 
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }

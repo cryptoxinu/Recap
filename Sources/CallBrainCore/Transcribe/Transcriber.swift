@@ -42,9 +42,12 @@ public enum TranscribeError: Error, Sendable, Equatable {
 /// whose turn contains the segment's MIDPOINT, then merge consecutive same-speaker segments into
 /// utterances. Pure + deterministic → unit-testable without any model.
 public enum SpeakerAligner {
+    /// A diarized turn this far (s) from a transcript segment's midpoint is NOT credibly the speaker —
+    /// the segment likely sits in silence/hold-music. Beyond it, fall back rather than mis-attribute.
+    static let maxGapSeconds = 3.0
+
     public static func align(_ segments: [TranscribedSegment],
                              speakers: [SpeakerSegment]) -> [ParsedUtterance] {
-        let inferred = speakers.isEmpty
         var merged: [(speaker: String, tStart: Double, tEnd: Double, text: String)] = []
         for seg in segments {
             let text = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,17 +60,22 @@ public enum SpeakerAligner {
                 merged.append((speaker, seg.tStart, seg.tEnd, text))
             }
         }
+        // Whisper timestamps are MODEL-DERIVED (not source-stamped) and "Speaker 1/2" are diarization
+        // guesses, never explicit human labels → `.derived` + `isInferredSpeaker: true` always
+        // (Codex P3 gate: CTM confidence semantics).
         return merged.enumerated().map { i, m in
-            ParsedUtterance(seq: i, speakerRaw: m.speaker, speakerConfidence: inferred ? nil : 0.9,
+            ParsedUtterance(seq: i, speakerRaw: m.speaker, speakerConfidence: speakers.isEmpty ? nil : 0.8,
                             tStart: m.tStart, tEnd: m.tEnd, text: m.text,
-                            isInferredSpeaker: inferred, tsConfidence: .exact)
+                            isInferredSpeaker: true, tsConfidence: .derived)
         }
     }
 
-    /// The speaker whose turn contains `t`; else the nearest turn (handles small gaps); nil if none.
+    /// The speaker whose turn contains `t`; else the nearest turn IF within `maxGapSeconds` (so a segment
+    /// in a long gap isn't attributed to a speaker minutes away — P3 gate MED); nil otherwise.
     static func speakerFor(midpoint t: Double, in speakers: [SpeakerSegment]) -> String? {
         if let hit = speakers.first(where: { t >= $0.tStart && t < $0.tEnd }) { return hit.speaker }
-        return speakers.min(by: { distance($0, t) < distance($1, t) })?.speaker
+        guard let nearest = speakers.min(by: { distance($0, t) < distance($1, t) }) else { return nil }
+        return distance(nearest, t) <= maxGapSeconds ? nearest.speaker : nil
     }
     private static func distance(_ s: SpeakerSegment, _ t: Double) -> Double {
         t < s.tStart ? s.tStart - t : t - s.tEnd

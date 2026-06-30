@@ -31,10 +31,11 @@ struct CBTranscribe {
 
             FileHandle.standardError.write(Data("transcribing \(url.lastPathComponent) with whisper '\(model)'\(diarize ? " + diarization" : "")…\n".utf8))
             let title = url.deletingPathExtension().lastPathComponent
-            let parsed = try await pipeline.run(url: url, title: title, date: TimeCode.ymd(Date())) { stage, p in
+            let out = try await pipeline.run(url: url, title: title, date: TimeCode.ymd(Date())) { stage, p in
                 FileHandle.standardError.write(Data("  [\(stage)] \(Int(p * 100))%\n".utf8))
             }
-            FileHandle.standardError.write(Data("transcript: \(parsed.utterances.count) utterances, \(parsed.speakers.count) speaker(s)\n".utf8))
+            let parsed = out.transcript
+            FileHandle.standardError.write(Data("transcript: \(parsed.utterances.count) utterances, \(parsed.speakers.count) speaker(s), diarized=\(out.diarizationSucceeded)\n".utf8))
             for u in parsed.utterances.prefix(4) {
                 print("  \(u.speakerRaw) [\(Int(u.tStart))s]: \(u.text.prefix(90))")
             }

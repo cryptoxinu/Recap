@@ -146,24 +146,26 @@ final class ImportCoordinator {
         }
         let jobID = j.id
         let title = url.deletingPathExtension().lastPathComponent
-        let parsed = try await env.transcription.run(url: url, title: title, date: TimeCode.ymd(Date())) {
+        let out = try await env.transcription.run(url: url, title: title, date: TimeCode.ymd(Date())) {
             [weak self] stage, frac in
             Task { @MainActor in self?.showProgress(jobID, stage, frac) }
         }
-        let outcome = try await env.ingest.ingest(parsed)
+        let outcome = try await env.ingest.ingest(out.transcript)
         j.format = "transcribed"
         j.meetingID = outcome.meetingID
-        j.title = parsed.title
+        j.title = out.transcript.title
         j.chunkCount = outcome.chunkCount
-        j.state = outcome.deduped ? .done : .done
+        j.state = .done
+        let speakerNote = out.diarizationRequested && !out.diarizationSucceeded
+            ? " · speakers not identified" : " · \(out.transcript.speakers.count) speaker\(out.transcript.speakers.count == 1 ? "" : "s")"
         j.message = outcome.deduped
             ? "Already imported — this recording matches a call in your library."
-            : "Transcribed \(parsed.utterances.count) turns · \(parsed.speakers.count) speaker\(parsed.speakers.count == 1 ? "" : "s")."
+            : "Transcribed \(out.transcript.utterances.count) turns\(speakerNote)."
     }
 
     /// Live progress for a transcribing job — updates the DISPLAY list in memory (not persisted per tick).
     private func showProgress(_ jobID: String, _ stage: TranscriptionPipeline.Stage, _ frac: Double) {
-        guard let i = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        guard let i = jobs.firstIndex(where: { $0.id == jobID }), jobs[i].state == .running else { return }
         let label: String
         switch stage {
         case .decoding: label = "Reading audio…"
@@ -212,6 +214,11 @@ final class ImportCoordinator {
         case IngestError.embeddingCountMismatch:
             return "Embedding service returned the wrong count — is Ollama running?"
         case ReadError.tooLarge(let mb): return "That file is too large to import (\(mb) MB)."
+        case AudioDecodeError.noAudioTrack: return "That recording has no audio track to transcribe."
+        case AudioDecodeError.tooLong(let hours): return "That recording is too long to transcribe (\(Int(hours))h+)."
+        case AudioDecodeError.readFailed(let why): return "Couldn't read the recording's audio: \(why)"
+        case TranscribeError.emptyAudio: return "No speech was found in that recording."
+        case TranscribeError.modelUnavailable(let why): return "Transcription model unavailable: \(why)"
         case ImportRunError.missingFile(let name): return "“\(name)” has moved or been deleted — re-add it."
         case ImportRunError.noPayload: return "This import had no saved content to process."
         default: return error.localizedDescription

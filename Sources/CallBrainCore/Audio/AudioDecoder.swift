@@ -4,6 +4,7 @@ import AVFoundation
 public enum AudioDecodeError: Error, Sendable, Equatable {
     case noAudioTrack
     case readFailed(String)
+    case tooLong(hours: Double)
 }
 
 /// Decodes any AVFoundation-readable file (`.mp4`/`.mov`/`.m4a`/`.wav`/…) into **16 kHz mono Float32**
@@ -11,11 +12,21 @@ public enum AudioDecodeError: Error, Sendable, Equatable {
 /// `AVAssetReaderTrackOutput` decompresses + resamples to the requested format in one pass.
 public enum AudioDecoder {
     public static let targetSampleRate = 16_000
+    /// Reject absurdly long recordings before materializing the whole sample buffer in memory
+    /// (a 16 kHz mono hour ≈ 230 MB of Float). 6 h covers any real meeting; beyond that we refuse
+    /// rather than risk OOM (Codex P3 gate HIGH).
+    public static let maxDurationSeconds = 6 * 3600
 
     public static func decode16kMono(url: URL) async throws -> [Float] {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw AudioDecodeError.noAudioTrack
+        }
+        // Bound by the asset's reported duration before reading.
+        if let seconds = try? await asset.load(.duration).seconds, seconds.isFinite, seconds > 0 {
+            if Int(seconds) > maxDurationSeconds {
+                throw AudioDecodeError.tooLong(hours: (seconds / 3600).rounded(.up))
+            }
         }
         let reader = try AVAssetReader(asset: asset)
         let settings: [String: Any] = [
@@ -36,6 +47,10 @@ public enum AudioDecoder {
         }
 
         var samples: [Float] = []
+        // Reserve up to the duration estimate so the array doesn't repeatedly double (≤ the cap above).
+        if let seconds = try? await asset.load(.duration).seconds, seconds.isFinite, seconds > 0 {
+            samples.reserveCapacity(min(Int(seconds) * targetSampleRate, maxDurationSeconds * targetSampleRate))
+        }
         while let buffer = output.copyNextSampleBuffer() {
             if let block = CMSampleBufferGetDataBuffer(buffer) {
                 let length = CMBlockBufferGetDataLength(block)
