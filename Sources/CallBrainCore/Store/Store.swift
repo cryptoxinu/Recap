@@ -478,6 +478,30 @@ public final class Store: @unchecked Sendable {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }
 
+    /// Chunk IDs whose meeting's date is in [fromYMD, toYMDExclusive) — the hard date-gating candidate
+    /// set (Phase 4). `meetings.date` is "YYYY-MM-DD", so an ISO string compare is the correct ordering.
+    public func chunkIDs(fromYMD: String, toYMDExclusive: String) throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT c.chunk_id FROM transcript_chunks c
+                JOIN meetings m ON m.id = c.meeting_id
+                WHERE m.date >= ? AND m.date < ?
+                """, arguments: [fromYMD, toYMDExclusive])
+        }
+    }
+
+    /// Meetings whose date is in [fromYMD, toYMDExclusive) — for date-scoped lists / "this week".
+    public func meetings(fromYMD: String, toYMDExclusive: String, limit: Int = 500) throws -> [MeetingRow] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, title, date, source FROM meetings
+                WHERE date >= ? AND date < ? ORDER BY date_epoch DESC, created_at DESC LIMIT ?
+                """, arguments: [fromYMD, toYMDExclusive, limit]).map {
+                    MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"])
+                }
+        }
+    }
+
     /// Idempotency tier-1: an already-ingested meeting with this exact content fingerprint, if any
     /// (so re-dropping the same export is a no-op instead of a duplicate). Returns id + chunk count.
     public func existingMeeting(contentHash: String) throws -> (id: String, chunks: Int)? {

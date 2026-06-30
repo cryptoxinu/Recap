@@ -31,6 +31,26 @@ struct AskEngineTests {
         #expect(ans.provider == nil)          // never reached the provider
     }
 
+    @Test("hard date-gate: a 'this week' question with no in-window calls refuses WITHOUT the LLM")
+    func dateGateRefusesOutOfWindow() async throws {
+        let store = try freshStore()
+        // One meeting dated well in the past.
+        try store.saveMeeting(Meeting(id: "old", title: "Old call", date: "2025-01-02", source: .fireflies),
+                              chunks: [Store.ChunkInput(chunkID: "old_c0", meetingID: "old", version: 0, seq: 0,
+                                       speaker: "Max", tStart: 0, tEnd: 1, text: "We talked about Render.",
+                                       contentHash: "h")])
+        let search = SearchEngine(store: store, embedder: StubEmbedder(), space: "stub__v1")
+        let llm = ClaudeRunner(executablePath: "/nonexistent/claude", sandboxDir: sandbox())
+        let ask = AskEngine(search: search, llm: llm)
+
+        let now = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 29))!
+        let ans = try await ask.ask("what did we discuss this week", now: now)
+        #expect(ans.status == .noSources)
+        #expect(ans.provider == nil)                 // never reached the LLM
+        #expect(ans.plan?.dateRange?.label == "this week")
+        #expect(ans.text.contains("this week"))
+    }
+
     @Test("referencedTags extracts only valid [S#] markers")
     func referencedTags() {
         let t = "Confirmed [S2]. Also [S6] and [S10]. Not [SX], not bare S5, not [s2]."

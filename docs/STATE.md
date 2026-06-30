@@ -125,6 +125,16 @@ not a transcript wall. Persist **utterances** (individual turns) and render thos
 - Prereqs (present): `claude`, `codex` (logged in), `ollama` (running, `nomic-embed-text` pulled),
   Swift 6.3, Xcode. System python 3.14 → backend tooling uses uv-pinned 3.12 (only in `tools/`, never shipped).
 
+## 10.5 Sequencing decision (2026-06-30, overnight autonomous run)
+Plan order is 0→8 with 4.5 after 4. **Adjusted execution order: 4 → 4.5 → 3 → 5 → 6 → 7 → 8.**
+Rationale: (a) the founder reprioritized tonight toward the **meeting workspace + AI intelligence +
+conversation history** (Phases 4 & 4.5); (b) Phase 4 (planner/modes/action-items) is a **prerequisite**
+for the Phase-4.5 reasoning timeline; (c) Phase 3 (WhisperKit/FluidAudio transcription) is the heaviest /
+highest-risk for an unattended run (large CoreML model downloads) — real audio exists in `~/Downloads`
+(demo/pitch `.mp4`/`.mov`) so it CAN be verified later. Phases 4 & 4.5 are pure Swift, fully
+buildable + screenshot-verifiable offline → highest reliable value overnight. Not scope creep — the
+scope is unchanged, only the order.
+
 ## 11. The loop discipline (founder: "don't stop")
 Driven by `/loop` (dynamic self-pace). Each iteration: do the next PHASE-PLAN step → screenshot-verify →
 `swift test` → Codex-audit at phase boundaries → commit → update the PHASE-PLAN ledger + this file →

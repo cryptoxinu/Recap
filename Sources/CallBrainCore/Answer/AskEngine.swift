@@ -28,6 +28,7 @@ public struct AskEngine: Sendable {
         public let citations: [EvidenceRef]
         public let provider: ProviderID?
         public let model: String?
+        public var plan: QueryPlan? = nil       // the deterministic plan (date window / mode) used
     }
 
     static let systemPrompt = """
@@ -40,13 +41,29 @@ public struct AskEngine: Sendable {
     - If the SOURCES do not answer the question, reply with exactly: NO_SOURCED_EVIDENCE
     """
 
-    /// Ask a question. Returns a refusal envelope (no LLM call) when retrieval is empty.
-    public func ask(_ query: String, topK: Int = 8) async throws -> Answer {
-        let hits = try await search.hybrid(query, finalLimit: topK)
+    /// Ask a question. Returns a refusal envelope (no LLM call) when retrieval is empty. `now` is the
+    /// clock used for date-gating (injectable for tests). A time-scoped question ("this week") becomes a
+    /// HARD candidate filter — evidence can ONLY come from inside the window, never outside it.
+    public func ask(_ query: String, topK: Int = 8, now: Date = Date()) async throws -> Answer {
+        let plan = QueryPlanner.plan(query, now: now)
+
+        var candidates: [String]? = nil
+        if let dr = plan.dateRange {
+            let ids = try search.store.chunkIDs(fromYMD: dr.startYMD, toYMDExclusive: dr.endYMDExclusive)
+            if ids.isEmpty {
+                return Answer(status: .noSources,
+                              text: "You don't have any calls from \(dr.label).",
+                              citations: [], provider: nil, model: nil, plan: plan)
+            }
+            candidates = ids
+        }
+
+        let hits = try await search.hybrid(query, candidateChunkIDs: candidates, finalLimit: topK)
         guard !hits.isEmpty else {
+            let scope = plan.dateRange.map { " from \($0.label)" } ?? ""
             return Answer(status: .noSources,
-                          text: "No indexed call contains evidence for that.",
-                          citations: [], provider: nil, model: nil)
+                          text: "Nothing in your calls\(scope) matches that.",
+                          citations: [], provider: nil, model: nil, plan: plan)
         }
 
         let refs = hits.enumerated().map { i, h in
@@ -56,8 +73,11 @@ public struct AskEngine: Sendable {
         let evidence = refs
             .map { "[\($0.tag)] \($0.speaker ?? "Unknown"): \($0.text)" }
             .joined(separator: "\n\n")
+        let scopeNote = plan.dateRange.map {
+            "These sources are ALL from \($0.label) — answer only about that period.\n\n"
+        } ?? ""
         let prompt = """
-        SOURCES:
+        \(scopeNote)SOURCES:
         \(evidence)
 
         QUESTION: \(query)
@@ -71,7 +91,7 @@ public struct AskEngine: Sendable {
 
         if text == "NO_SOURCED_EVIDENCE" || text.isEmpty {
             return Answer(status: .noSources, text: "No sourced evidence found.",
-                          citations: [], provider: .claude, model: completion.model)
+                          citations: [], provider: .claude, model: completion.model, plan: plan)
         }
         // Citation validation (anti-hallucination, Codex Phase-1 fix): keep ONLY refs that were actually
         // cited with a VALID [S#] tag. If the model grounded nothing valid in the sources, refuse rather
@@ -81,10 +101,10 @@ public struct AskEngine: Sendable {
         guard !cited.isEmpty else {
             return Answer(status: .noSources,
                           text: "I couldn't ground an answer to that in your calls — try rephrasing or importing more.",
-                          citations: [], provider: .claude, model: completion.model)
+                          citations: [], provider: .claude, model: completion.model, plan: plan)
         }
         return Answer(status: .answered, text: text, citations: cited,
-                      provider: .claude, model: completion.model)
+                      provider: .claude, model: completion.model, plan: plan)
     }
 
     /// The set of `S#` tags the answer actually references (from `[S#]` markers).
