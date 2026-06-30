@@ -22,6 +22,16 @@ dropdowns** · **background generation + Stop button** · **Light/Dark selector*
 (C1 Stop crash, H2 research re-enabled hooks, H3 stop/resend race, H4 citation-link render — all fixed).
 **139 tests green.** All screenshot-verified live.
 
+### Deferred-work sweep (2026-06-30, commits `e9bef40`→`a634bdf`) — see `docs/audits/2026-06-30-deferred-sweep-and-drive.md`
+Cleared the deferred backlog: **delete/archive call** UI · **in-meeting AskFred survives navigation** ·
+**web-source URL polish** · **Google Drive cloud sync** (native OAuth PKCE+loopback, Keychain tokens,
+streaming Drive v3 pull → import, folder picker, periodic+on-launch auto-sync, **+ zero-OAuth "Detect
+Drive folder"** for non-coders; `docs/GOOGLE-DRIVE-SETUP.md`). **150 tests green.** Audited in **5 rounds**
+(2 parallel Codex + a 4-lens SME workflow with adversarial verify + 2 Codex re-audits → **CLEAN**); every
+confirmed HIGH/MED/LOW fixed (token-exfil guard, streaming media, never-whole-Drive, loopback leak,
+OAuth-timeout hang, connect/disconnect epoch race, Keychain ThisDeviceOnly+checked-save, atomic cache).
+**Still founder-cred-blocked:** the Google OAuth client (5-min setup) + packaging (Apple/Sparkle).
+
 ## 🎉 BUILD COMPLETE — all phases 0–8 + 4.5 shipped & gated (2026-06-30)
 **The entire PHASE-PLAN is done.** 135 tests green, ~78 commits on `main`. Every phase Codex-audited
 (P7+P8 codex gates hung → rigorous self-review; P0–P6 + 4.5 all codex/SME-gated). What works, end-to-end,
