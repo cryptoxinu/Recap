@@ -72,3 +72,31 @@ toolbar chevron). Use SF Symbols, not custom icons, for native feel.
 
 QA every build with `native-mac-qa-sme` (launch, drive, screenshot, critique) — bubbles must hug
 content, buttons must be wired, empty states must teach, no raw markdown flash during streaming.
+
+---
+
+## Meeting workspace & AskFred (founder direction 2026-06-30 — 3 reference screenshots)
+
+The founder shared three Fireflies screenshots as the target for **Phase 4.5**. The exact look/behaviour to match:
+
+### A. Meeting view = Notes | Transcript + docked AskFred (screenshot 1)
+- **Left content pane** with segmented tabs at top: **Notes** · *AI Skills*. Header = meeting title (e.g. "Quick Touch base"), owner chip ("Zade Kal"), date ("Jun 25 2026, 2:33 PM"), language, a **Video** button.
+- Under the header: **✨ General Summary ▾** and **↻ Refine Summary** controls + a copy button.
+- **Notes** = structured AI summary: **bold section headers** ("Miner Signup and Qualification", "Partnerships and Integration") → bullets → **indented sub-bullets**, and **every point has a clickable `(00:10)` timestamp** that jumps into the transcript.
+- **Right pane** = tabs **AskFred** · **Transcript**. AskFred is the persistent chat: the user asks ("what is everything ghazal asked me to do?"), the answer is a clean numbered list where **each item ends with a clickable `[03:50]` timestamp citation** that deep-links into the transcript. Footer actions: ⚡Automate, copy, 👍/👎.
+
+### B. Clean raw transcript reader (screenshot 3)
+- Tab switches the right (or full) pane to **Transcript**: a **Find or Replace** bar at top, then turn-by-turn: **speaker avatar + name (▾) + clickable `00:00` timestamp + 🔗**, then the spoken text as a clean, generously-spaced paragraph. Speaker name in accent color. A floating **"Sync with audio ▾"** pill. Reads effortlessly — never a wall of text.
+
+### C. Agentic, transparent AI search (screenshot 2)
+- A global search ("What was everything discussed about render…") shows a **"Thinking 19s"** collapsible, then a **reasoning timeline** with labeled steps + spinner:
+  - **✨ Reasoning** — "Working through the details."
+  - **◌ Understanding Query** — "Identifying intent and determining which meetings and data sources are relevant."
+  - **📅 Finding meetings** — "Searching meetings for 'rendering'…"
+  - then streamed prose ("Let me find meetings where 'render' was discussed…") → final cited answer.
+- The steps must mirror **real pipeline work** (intent → mode → retrieval → synthesis), not fake theater.
+
+### D. Conversation history / Recents (founder note)
+- A left-rail list of **previous chats** (recents) so the founder can revisit/reference past searches and reopen a thread. Durable chat **sessions**, auto-named, searchable.
+
+> These are the Phase 4.5 acceptance targets. Build to this fidelity; QA with `native-mac-qa-sme`.

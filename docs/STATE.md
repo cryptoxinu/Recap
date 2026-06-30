@@ -93,6 +93,11 @@ fingerprint-learning, **native Swift `.docx` read** (replace python extract), me
 two-tier BLAKE3 idempotency + dedupe, durable job queue + Import Queue/needs-review UI.
 **Phase 3** — Local transcription: AVFoundation → WhisperKit + FluidAudio diarization (raw Meet video).
 **Phase 4** — Retrieval depth: all 8 AI modes, hard date-gating, action-item extraction → Tasks, eval harness.
+**Phase 4.5** — **Fireflies-grade meeting workspace & conversational intelligence** (founder direction 2026-06-30,
+  3 ref screenshots in DESIGN §"Meeting workspace & AskFred"): Notes|Transcript tabbed meeting view + docked
+  AskFred chat; sectioned notes with clickable `[MM:SS]` → clean transcript reader (Find bar, speaker grouping,
+  sync-to-audio); timestamp-linked citations; **agentic transparent reasoning timeline** during search; durable
+  **conversation history / Recents** (revisit prior chats). Builds on Phase 4 modes/planner.
 **Phase 5** — Provider resilience: Codex adapter + claude↔codex flip + fallback + streaming + quota queue.
 **Phase 6** — Native polish: background jobs, notifications (overdue tasks), menu-bar, Google Drive sync, Duplicate Review.
 **Phase 7** — Archive migration: bulk backfill of the real multi-year archive, threshold tuning, usearch at scale.
