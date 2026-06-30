@@ -95,10 +95,13 @@ real morning sync.
 HIGH/MED/LOW fixed (+9 regression tests, 82 green). Deferred-not-creep: SRT/VTT + Cluely parsers, Meet
 sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
 **Phase 3** — Local transcription: AVFoundation → WhisperKit + FluidAudio diarization (raw Meet video).
-**Phase 4** — ▶ IN PROGRESS: ✅ hard date-gating (QueryPlanner + refuse-out-of-window) + ✅ action items →
-  **Tasks view** (deterministic Gemini-notes lift, 16 real tasks live, screenshot-verified). REMAINING:
-  transcript LLM action-item extraction, richer ask modes (this-week/company/pre+post-call),
-  explanatory-rerank, eval harness + golden corpus, then the Phase-4 Codex gate. (94 tests green.)
+**Phase 4 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** hard date-gating (QueryPlanner + refuse-out-of-
+  window), action items → **Tasks view** (16 real tasks live), **anti-hallucination eval harness** (live
+  3/3: citation precision, no out-of-window leak, grounded refusal, dangling-tag check), 5 ask modes.
+  Gate: 3 HIGH+3 MED all fixed (`docs/audits/phase4-audit.md`). Deferred-not-creep: transcript LLM
+  action-items, explanatory-rerank, company/pre-post-call templates. (104 tests green.)
+**Phase 4.5 — ▶ IN PROGRESS:** conversation-persistence backbone built (conversations+messages v7).
+  NEXT: wire AskPanel to persist + Recents rail; Notes|Transcript meeting workspace + docked AskFred.
 **Phase 4.5** — **Fireflies-grade meeting workspace & conversational intelligence** (founder direction 2026-06-30,
   3 ref screenshots in DESIGN §"Meeting workspace & AskFred"): Notes|Transcript tabbed meeting view + docked
   AskFred chat; sectioned notes with clickable `[MM:SS]` → clean transcript reader (Find bar, speaker grouping,
