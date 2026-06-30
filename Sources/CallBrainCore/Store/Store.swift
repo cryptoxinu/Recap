@@ -854,6 +854,28 @@ public final class Store: @unchecked Sendable {
                        citations: cites, createdAt: r["created_at"] ?? 0)
     }
 
+    // MARK: - backup / restore (Phase 8)
+
+    /// Write a clean, consistent snapshot of the whole database to `url` (a `.cbk` file) via SQLite
+    /// `VACUUM INTO` — safe to run on the live DB (it's a transactional copy, no WAL fragments).
+    public func backup(to url: URL) throws {
+        let path = url.path.replacingOccurrences(of: "'", with: "''")
+        try? FileManager.default.removeItem(at: url)   // VACUUM INTO fails if the target exists
+        // VACUUM can't run inside a transaction → writeWithoutTransaction.
+        try dbQueue.writeWithoutTransaction { db in
+            try db.execute(sql: "VACUUM INTO '\(path)'")
+        }
+    }
+
+    /// Validate a `.cbk` is a real CallBrain backup (opens read-only, checks the core schema) before a
+    /// restore overwrites the user's data.
+    public static func isValidBackup(at url: URL) -> Bool {
+        guard let q = try? DatabaseQueue(path: url.path) else { return false }
+        return ((try? q.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('meetings','transcript_chunks')") ?? 0
+        }) ?? 0) == 2
+    }
+
     // MARK: - helpers
 
     private static func iso(_ d: Date) -> String { ISO8601DateFormatter().string(from: d) }

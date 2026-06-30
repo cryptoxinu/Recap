@@ -1,10 +1,14 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import CallBrainCore
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var primary: ProviderID = .claude
     @State private var taskReminders = false
+    @State private var backupStatus: String?
+    @State private var restoreStaged = false
 
     var body: some View {
         Form {
@@ -36,10 +40,42 @@ struct SettingsView: View {
             Section("Storage") {
                 LabeledContent("Data folder", value: env.dataRoot.path)
                 LabeledContent("Calls indexed", value: "\(env.meetingCount())")
+                HStack {
+                    Button("Back up…") { backUp() }
+                    Button("Restore from backup…") { restore() }
+                    Spacer()
+                    if let s = backupStatus { Text(s).font(.caption).foregroundStyle(.secondary) }
+                }
+                if restoreStaged {
+                    Text("Backup restored — quit and reopen CallBrain to finish.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Text("A backup (.cbk) is a complete, encryptable-at-rest copy of all your calls, tasks, and chats.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
         .onAppear { primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled }
+    }
+
+    private var cbkType: UTType { UTType(filenameExtension: "cbk") ?? .data }
+
+    private func backUp() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [cbkType]
+        panel.nameFieldStringValue = "CallBrain-\(TimeCode.ymd(Date())).cbk"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try env.backup(to: url); backupStatus = "Backed up." }
+        catch { backupStatus = "Backup failed: \(error.localizedDescription)" }
+    }
+
+    private func restore() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [cbkType]
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if env.stageRestore(from: url) { restoreStaged = true; backupStatus = nil }
+        else { backupStatus = "That isn't a valid CallBrain backup." }
     }
 }

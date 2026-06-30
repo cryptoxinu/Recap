@@ -84,6 +84,8 @@ struct RootView: View {
     // Default tab; CALLBRAIN_TAB=<rawValue> opens straight to a tab (used for screenshot QA).
     @State private var selection: SidebarItem? = SidebarItem(
         rawValue: ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] ?? "home") ?? .home
+    @State private var showWelcome = !UserDefaults.standard.bool(forKey: WelcomeView.seenKey)
+        && ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] == nil   // skip during screenshot QA
 
     var body: some View {
         NavigationSplitView {
@@ -109,5 +111,6 @@ struct RootView: View {
             }
         }
         .task { NotificationManager.refresh(openTaskCount: env.openTaskCount()) }
+        .sheet(isPresented: $showWelcome) { WelcomeView() }
     }
 }

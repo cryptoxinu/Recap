@@ -20,6 +20,7 @@ final class AppEnvironment {
     let initError: String?
     /// App-wide durable import queue (created at the end of init, once the store exists).
     private(set) var importCoordinator: ImportCoordinator!
+    let dbPath: String
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -30,6 +31,8 @@ final class AppEnvironment {
         self.dataRoot = base
 
         let path = base.appendingPathComponent("callbrain.sqlite3").path
+        self.dbPath = path
+        Self.applyPendingRestoreIfAny(dbPath: path)   // swap in a staged restore before opening (Phase 8)
         do {
             self.store = try Store(path: path)
             self.initError = nil
@@ -87,4 +90,33 @@ final class AppEnvironment {
     /// Re-arm the daily reminder with the current open-task count — call whenever tasks change (completed,
     /// imported, or a meeting deleted) so a scheduled notification never fires a stale count (P6 gate MED).
     func refreshReminders() { NotificationManager.refresh(openTaskCount: openTaskCount()) }
+
+    // MARK: - backup / restore (Phase 8)
+
+    func backup(to url: URL) throws { try store.backup(to: url) }
+
+    /// Stage a `.cbk` to be swapped in on next launch (a live DB can't be replaced under itself).
+    /// Returns false if the file isn't a valid CallBrain backup.
+    func stageRestore(from url: URL) -> Bool {
+        guard Store.isValidBackup(at: url) else { return false }
+        let pending = dbPath + ".pending-restore"
+        try? FileManager.default.removeItem(atPath: pending)
+        do { try FileManager.default.copyItem(at: url, to: URL(fileURLWithPath: pending)); return true }
+        catch { return false }
+    }
+
+    /// On launch: if a restore was staged, back up the current DB then swap the staged file into place.
+    static func applyPendingRestoreIfAny(dbPath: String) {
+        let fm = FileManager.default
+        let pending = dbPath + ".pending-restore"
+        guard fm.fileExists(atPath: pending) else { return }
+        defer { try? fm.removeItem(atPath: pending) }
+        guard Store.isValidBackup(at: URL(fileURLWithPath: pending)) else { return }   // invalid → discard
+        // Keep the previous DB as a safety net, and clear WAL/SHM so the restored file is authoritative.
+        try? fm.removeItem(atPath: dbPath + ".pre-restore")
+        if fm.fileExists(atPath: dbPath) { try? fm.moveItem(atPath: dbPath, toPath: dbPath + ".pre-restore") }
+        try? fm.removeItem(atPath: dbPath + "-wal")
+        try? fm.removeItem(atPath: dbPath + "-shm")
+        try? fm.moveItem(atPath: pending, toPath: dbPath)
+    }
 }
