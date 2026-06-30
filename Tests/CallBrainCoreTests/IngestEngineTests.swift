@@ -46,4 +46,23 @@ struct IngestEngineTests {
         #expect(IngestEngine.sha256("a") != IngestEngine.sha256("b"))
         #expect(IngestEngine.sha256("Render").count == 64)   // hex SHA-256
     }
+
+    @Test("re-ingesting identical content is idempotent (deduped, no duplicate, no re-embed)")
+    func dedupes() async throws {
+        let store = try freshStore()
+        let space = "stub__v1"
+        let engine = IngestEngine(store: store, embedder: StubEmbedder(), space: space)
+
+        let first = try await engine.ingestFathom(FathomParserTests.sample)
+        #expect(first.deduped == false)
+        #expect(first.embedded == 3)
+
+        let again = try await engine.ingestFathom(FathomParserTests.sample)
+        #expect(again.deduped == true)
+        #expect(again.meetingID == first.meetingID)        // same meeting returned
+        #expect(again.chunkCount == 3)
+        #expect(again.embedded == 0)                       // skipped the embedding cost
+        #expect(try store.meetingCount() == 1)             // no duplicate row
+        #expect(try store.embeddingCount(space: space) == 3)
+    }
 }

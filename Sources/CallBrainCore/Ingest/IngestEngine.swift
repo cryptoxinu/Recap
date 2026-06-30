@@ -22,6 +22,7 @@ public struct IngestEngine: Sendable {
         public let meetingID: String
         public let chunkCount: Int
         public let embedded: Int
+        public var deduped: Bool = false   // true when an identical meeting already existed (no re-ingest)
     }
 
     public func ingestFireflies(_ data: Data) async throws -> Outcome {
@@ -91,6 +92,13 @@ public struct IngestEngine: Sendable {
 
     /// Persist a parsed transcript end-to-end and return what landed.
     public func ingest(_ parsed: ParsedTranscript) async throws -> Outcome {
+        // Idempotency (tier-1): identical content already ingested → return it, skipping the embedding
+        // cost and avoiding a duplicate meeting. Fingerprint = SHA-256 of the ordered utterance texts.
+        let fingerprint = "sha256:" + Self.sha256(parsed.utterances.map(\.text).joined(separator: "\n"))
+        if let existing = try store.existingMeeting(contentHash: fingerprint) {
+            return Outcome(meetingID: existing.id, chunkCount: existing.chunks, embedded: 0, deduped: true)
+        }
+
         let meetingID = "m_" + UUID().uuidString
 
         let utterances = parsed.utterances.map { pu in
@@ -115,7 +123,7 @@ public struct IngestEngine: Sendable {
             startedAt: parsed.startedAt,
             durationSeconds: parsed.durationSeconds,
             source: parsed.source,
-            contentFingerprint: "sha256:" + Self.sha256(parsed.utterances.map(\.text).joined(separator: "\n")))
+            contentFingerprint: fingerprint)
 
         let inputs = chunks.map { ch in
             Store.ChunkInput(chunkID: "\(meetingID)_c\(ch.seq)", meetingID: meetingID, version: 0,

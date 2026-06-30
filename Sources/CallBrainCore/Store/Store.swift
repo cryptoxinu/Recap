@@ -395,6 +395,19 @@ public final class Store: @unchecked Sendable {
     public func meetingCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM meetings") ?? 0 }
     }
+
+    /// Idempotency tier-1: an already-ingested meeting with this exact content fingerprint, if any
+    /// (so re-dropping the same export is a no-op instead of a duplicate). Returns id + chunk count.
+    public func existingMeeting(contentHash: String) throws -> (id: String, chunks: Int)? {
+        try dbQueue.read { db in
+            guard let id = try String.fetchOne(db,
+                sql: "SELECT id FROM meetings WHERE content_hash = ? LIMIT 1", arguments: [contentHash])
+            else { return nil }
+            let n = try Int.fetchOne(db,
+                sql: "SELECT COUNT(*) FROM transcript_chunks WHERE meeting_id = ?", arguments: [id]) ?? 0
+            return (id: id, chunks: n)
+        }
+    }
     public func chunkCount() throws -> Int {
         try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM transcript_chunks") ?? 0 }
     }

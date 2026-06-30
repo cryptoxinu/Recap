@@ -98,9 +98,18 @@ final class ImportCoordinator {
             j.meetingID = outcome.meetingID
             j.title = resolved.transcript.title
             j.chunkCount = outcome.chunkCount
-            // AI-resolved (unknown layout) → ask the human to confirm structure; deterministic → done.
-            j.state = resolved.usedAI ? .needsReview : .done
-            j.message = resolved.usedAI ? "AI structured this — open it to confirm speakers/turns look right." : nil
+            if outcome.deduped {
+                // Identical content already in the library — not an error, just nothing new to do.
+                j.state = .done
+                j.message = "Already imported — this matches a call already in your library."
+            } else if resolved.usedAI {
+                // AI-resolved (unknown layout) → ask the human to confirm the structure.
+                j.state = .needsReview
+                j.message = "AI structured this — open it to confirm speakers/turns look right."
+            } else {
+                j.state = .done
+                j.message = nil
+            }
             persist(j)
         } catch {
             j.state = .failed
