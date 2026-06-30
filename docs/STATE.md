@@ -13,6 +13,26 @@
 - `docs/research/` — the two full design-research passes + critic findings (provenance, never delete).
 - Memory anchor: `~/.claude/.../memory/callbrain_project_2026_06_29.md` (+ `MEMORY.md` index line).
 
+## 🎉 BUILD COMPLETE — all phases 0–8 + 4.5 shipped & gated (2026-06-30)
+**The entire PHASE-PLAN is done.** 135 tests green, ~78 commits on `main`. Every phase Codex-audited
+(P7+P8 codex gates hung → rigorous self-review; P0–P6 + 4.5 all codex/SME-gated). What works, end-to-end,
+verified live on this Mac:
+- **Capture**: Fathom/Fireflies/Gemini/paste (AI resolves anything) · **raw recordings transcribed
+  on-device** (WhisperKit + FluidAudio diarization, live-verified: real video → 2 speakers → transcript) ·
+  **bulk folder import**.
+- **Organize**: durable resumable import queue · content-hash dedupe + Duplicate Review · native NER ·
+  auto-extracted **Tasks** (16 real action items lifted from the founder's morning sync).
+- **Ask**: hybrid FTS5⊕vector⊕RRF retrieval · strict `[S#]`/`[MM:SS]` citations · hard date-gating ·
+  refuses-not-hallucinates · **agentic reasoning timeline** · anti-hallucination eval (live 3/3).
+- **Fireflies UX**: Notes\|Transcript meeting workspace + docked **AskFred** · **conversation history
+  (Recents)** · clean transcript reader + Find + timestamp-jump citations.
+- **Resilience**: **Claude⇄Codex flip** + transparent fallback (injection-hardened) · menu-bar
+  background-job survival · daily task reminders.
+- **Distribution**: `.cbk` backup/restore · first-run wizard · sign/notarize/Sparkle tooling.
+- **Founder credential to-dos** (only things left, all need real creds): packaging — see `docs/PACKAGING.md`
+  (Team ID 559YM79ZCA, notarytool profile, Sparkle EdDSA key, DMG/appcast hosting); and **Google Drive
+  auto-sync** (deferred — needs the founder's Google OAuth client + consent). Everything else is built.
+
 ## 1. What CallBrain is
 A private, **local-first macOS** meeting-intelligence app (a personal RAG over months/years of work
 calls) for the founder's job. Capture → organize → search → **ask AI** → extract tasks, with strict
