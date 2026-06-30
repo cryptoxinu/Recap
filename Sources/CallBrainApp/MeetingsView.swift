@@ -19,7 +19,10 @@ struct MeetingsView: View {
     private var filtered: [Store.MeetingRow] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         return meetings.filter { m in
-            if let cat = categoryFilter, CallCategory(stored: m.category) != cat { return false }
+            if let cat = categoryFilter {
+                // An uncategorized call (still classifying) matches no specific venture filter.
+                guard let stored = m.category, !stored.isEmpty, CallCategory(stored: stored) == cat else { return false }
+            }
             guard !q.isEmpty else { return true }
             return m.displayTitle.lowercased().contains(q) || m.title.lowercased().contains(q)
                 || m.source.lowercased().contains(q)
@@ -27,7 +30,7 @@ struct MeetingsView: View {
     }
 
     private func count(_ cat: CallCategory) -> Int {
-        meetings.filter { CallCategory(stored: $0.category) == cat }.count
+        meetings.filter { ($0.category?.isEmpty == false) && CallCategory(stored: $0.category) == cat }.count
     }
 
     var body: some View {

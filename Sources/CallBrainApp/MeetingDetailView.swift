@@ -416,7 +416,10 @@ struct MeetingDetailView: View {
         tasks = (try? env.store.tasks(meetingID: meetingID)) ?? []
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
         if meeting?.source == "gmeet_gemini" {
-            noteLines = utts.map(\.text)
+            // Fall back to transcript_chunks for older rows that have no utterances, so notes never go blank.
+            noteLines = utts.isEmpty
+                ? ((try? env.store.transcript(meetingID: meetingID)) ?? []).map(\.text)
+                : utts.map(\.text)
         } else {
             people = ((try? env.store.entities(meetingID: meetingID)) ?? [])
                 .filter { $0.kind == .person && $0.count >= 2 }.prefix(10).map { $0 }

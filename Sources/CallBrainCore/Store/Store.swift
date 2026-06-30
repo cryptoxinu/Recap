@@ -701,6 +701,27 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// IDs of every call with no category yet (for launch backfill — not limited to the recent window, so
+    /// older calls eventually get classified too).
+    public func meetingsNeedingCategory(limit: Int = 5000) throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT id FROM meetings WHERE category IS NULL OR category = '' LIMIT ?",
+                                arguments: [limit])
+        }
+    }
+
+    /// Auto-classification write — never overwrites a user's manual choice (the `category_manual = 0` guard
+    /// closes the check-then-write race when a manual override lands during an in-flight classification).
+    public func setAutoCategory(id: String, category: String, confidence: Double?) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                UPDATE meetings SET category = ?, category_confidence = ?,
+                       updated_at = strftime('%Y-%m-%d %H:%M:%S','now')
+                WHERE id = ? AND category_manual = 0
+                """, arguments: [category, confidence, id])
+        }
+    }
+
     public struct TranscriptRow: Sendable, Equatable, Identifiable {
         public let id: String          // chunk_id
         public let speaker: String?

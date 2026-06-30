@@ -117,6 +117,15 @@ struct DuplicateDetectorTests {
         #expect(DuplicateDetector.suggestions(metas).isEmpty)
     }
 
+    @Test("isGenericTitle: date-stamp auto-titles are generic, but a real title with a date is NOT")
+    func genericTitleScoping() {
+        #expect(DuplicateDetector.isGenericTitle("Meeting started 2026-06-24 12-32 PDT"))
+        #expect(DuplicateDetector.isGenericTitle("2026-06-24"))
+        #expect(DuplicateDetector.isGenericTitle("Untitled meeting"))
+        #expect(!DuplicateDetector.isGenericTitle("Q3 Board Review 2026-06-24"))   // real subject + a date
+        #expect(!DuplicateDetector.isGenericTitle("Render Integration Review"))
+    }
+
     @Test("matching uses the SMART title: identical smart titles across sources DO flag")
     func smartTitleMatches() {
         let metas = [

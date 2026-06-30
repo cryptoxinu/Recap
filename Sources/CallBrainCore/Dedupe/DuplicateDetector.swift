@@ -82,8 +82,13 @@ public enum DuplicateDetector {
         let t = s.lowercased().trimmingCharacters(in: .whitespaces)
         if t.isEmpty || genericTitles.contains(t) { return true }
         if t.hasPrefix("meeting started") || t.hasPrefix("meeting on") || t.hasPrefix("new meeting") { return true }
-        // Contains a yyyy-mm-dd / yyyy/mm/dd date stamp → it's an auto-name, not a real subject.
-        return t.range(of: #"\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b"#, options: .regularExpression) != nil
+        // Generic ONLY when the title is essentially just a date/time stamp — strip dates, times, and
+        // timezone/filler words, and if almost no real letters remain it carried no subject. A real title
+        // that merely contains a date ("Q3 Board Review 2026-06-24") keeps its letters → not generic.
+        let stripped = t
+            .replacingOccurrences(of: #"\d{1,4}[-/.:]\d{1,2}([-/.:]\d{1,4})?"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(am|pm|pdt|pst|est|edt|cst|cdt|mst|mdt|gmt|utc|at|on)\b"#, with: " ", options: .regularExpression)
+        return stripped.filter(\.isLetter).count < 3
     }
 
     private static func genericPair(_ a: String, _ b: String) -> Bool {

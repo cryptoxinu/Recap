@@ -149,7 +149,12 @@ final class AppEnvironment {
         // into a short digest; the full notes stay on the Transcript tab). Founder ask 2026-06-30: tabs on
         // every call.
         let utts = (try? store.utterances(meetingID: meetingID)) ?? []
-        let text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+        var text = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Older rows store transcript_chunks but no utterances — fall back to those so they still summarize.
+            let chunks = (try? store.transcript(meetingID: meetingID)) ?? []
+            text = chunks.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
+        }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
         // Local-first chain: best local model → smaller local fallback (if 14B isn't pulled) → cloud as a
@@ -205,7 +210,7 @@ final class AppEnvironment {
         let signal = [m.displayTitle, m.title, m.aiSummary ?? "", m.callSummary ?? "",
                       people.joined(separator: " "), body].joined(separator: "\n")
         let r = await categoryEngine.categorize(text: signal)
-        try? store.setCategory(id: meetingID, category: r.category.rawValue, confidence: r.confidence, manual: false)
+        try? store.setAutoCategory(id: meetingID, category: r.category.rawValue, confidence: r.confidence)
         titlesRevision &+= 1
         return true
     }
@@ -224,9 +229,9 @@ final class AppEnvironment {
         }
     }
 
-    /// On launch, classify any calls that don't have a category yet.
+    /// On launch, classify any calls that don't have a category yet (all of them, not just the recent window).
     func backfillCategories() {
-        for m in recentMeetings() where (m.category?.isEmpty ?? true) { classifyInBackground(m.id) }
+        for id in (try? store.meetingsNeedingCategory()) ?? [] { classifyInBackground(id) }
     }
 
     /// User picked a category by hand — pinned (auto-classification won't overwrite it).

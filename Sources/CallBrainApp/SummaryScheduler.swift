@@ -51,10 +51,9 @@ final class SummaryScheduler {
     }
 
     /// Queue every call that has no summary yet (launch backfill). Battery-gated; cheap when all present.
+    /// Includes Gemini calls now — every call gets a concise digest (founder ask 2026-06-30).
     func backfillMissing(_ meetings: [Store.MeetingRow]) {
-        for m in meetings where m.source != "gmeet_gemini" && (m.callSummary?.isEmpty ?? true) {
-            enqueueAuto(m.id)
-        }
+        for m in meetings where (m.callSummary?.isEmpty ?? true) { enqueueAuto(m.id) }
     }
 
     /// User pressed "Generate" / "Regenerate with AI" — runs regardless of power, ahead of the auto queue.

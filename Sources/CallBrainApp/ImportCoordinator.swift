@@ -197,6 +197,7 @@ final class ImportCoordinator {
         if !outcome.deduped {
             env.generateTitleIntelligence(for: outcome.meetingID)   // proper AI title + one-liner
             env.summarizeInBackground(outcome.meetingID)            // queue the full Summary-tab pass
+            env.classifyInBackground(outcome.meetingID)             // Ambient / Further Health / Other tag
         }
     }
 
