@@ -1,5 +1,6 @@
 import SwiftUI
 import CallBrainCore
+import CallBrainTranscribe
 
 /// Wires the CallBrainCore engines to a real on-disk store + local providers, for the app to use.
 /// SQLite + CLI sandbox live under ~/Library/Application Support/CallBrain/.
@@ -50,6 +51,11 @@ final class AppEnvironment {
     var ask: AskEngine { AskEngine(search: search, llm: llm) }
     var ingest: IngestEngine { IngestEngine(store: store, embedder: embedder, space: space) }
     var importer: AIImporter { AIImporter(llm: llm) }
+    /// On-device transcription (Phase 3): WhisperKit + FluidAudio behind the Core protocols. `base`
+    /// balances speed/accuracy; the model downloads + compiles on first use, then loads instantly.
+    var transcription: TranscriptionPipeline {
+        TranscriptionPipeline(transcriber: WhisperKitTranscriber(model: "base"), diarizer: FluidAudioDiarizer())
+    }
 
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }

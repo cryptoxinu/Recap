@@ -66,9 +66,9 @@ struct ImportView: View {
         VStack(spacing: 12) {
             Image(systemName: "tray.and.arrow.down.fill")
                 .font(.system(size: 34)).foregroundStyle(Theme.accent.opacity(0.85))
-            Text(dropTargeted ? "Release to import" : "Drag transcript files here")
+            Text(dropTargeted ? "Release to import" : "Drag transcripts or recordings here")
                 .font(.headline)
-            Text(".docx · .txt · .md · .json · .srt · .vtt")
+            Text(".docx · .txt · .srt · .vtt   ·   .mp4 · .mov · .m4a (transcribed on-device)")
                 .font(.caption).foregroundStyle(.secondary)
             Button { chooseFiles() } label: { Label("Choose files…", systemImage: "folder") }
                 .buttonStyle(.bordered)
@@ -92,7 +92,8 @@ struct ImportView: View {
         panel.canChooseDirectories = false
         panel.allowedContentTypes = [.init(filenameExtension: "docx"), .plainText, .json,
                                      .init(filenameExtension: "srt"), .init(filenameExtension: "vtt"),
-                                     .init(filenameExtension: "md")].compactMap { $0 }
+                                     .init(filenameExtension: "md"), .movie, .audio, .mpeg4Movie,
+                                     .init(filenameExtension: "m4a")].compactMap { $0 }
         if panel.runModal() == .OK { coordinator.enqueueFiles(panel.urls) }
     }
 

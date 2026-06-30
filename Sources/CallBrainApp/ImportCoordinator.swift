@@ -25,8 +25,15 @@ final class ImportCoordinator {
     func reload() { jobs = (try? env.store.importJobs()) ?? [] }
 
     /// True if any of these files has an extension CallBrain can read.
+    /// Audio/video files we transcribe on-device (Phase 3) rather than parse as text.
+    static let mediaExtensions: Set<String> = ["mp4", "mov", "m4a", "wav", "webm", "mp3", "aac", "caf", "m4v"]
+    static func isMedia(_ url: URL) -> Bool { mediaExtensions.contains(url.pathExtension.lowercased()) }
+
     static func importable(_ urls: [URL]) -> [URL] {
-        urls.filter { IngestEngine.readableExtensions.contains($0.pathExtension.lowercased()) }
+        urls.filter {
+            let ext = $0.pathExtension.lowercased()
+            return IngestEngine.readableExtensions.contains(ext) || mediaExtensions.contains(ext)
+        }
     }
 
     @discardableResult
@@ -88,6 +95,13 @@ final class ImportCoordinator {
         var j = job; j.state = .running; _ = persist(j)
 
         do {
+            // Media file → on-device transcription path (decode → WhisperKit → FluidAudio → ingest).
+            if job.payloadKind == .file, let path = job.payload, Self.isMedia(URL(fileURLWithPath: path)) {
+                try await runTranscription(job: &j, path: path)
+                _ = persist(j)
+                return
+            }
+
             let (outcome, resolved): (IngestEngine.Outcome, AIImporter.Resolved)
             switch (job.payloadKind, job.payload) {
             case (.file, .some(let path)):
@@ -122,6 +136,42 @@ final class ImportCoordinator {
             j.message = Self.friendly(error)
             _ = persist(j)
         }
+    }
+
+    /// Transcribe a media file on-device, then ingest the result like any other meeting.
+    private func runTranscription(job j: inout ImportJob, path: String) async throws {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw ImportRunError.missingFile(url.lastPathComponent)
+        }
+        let jobID = j.id
+        let title = url.deletingPathExtension().lastPathComponent
+        let parsed = try await env.transcription.run(url: url, title: title, date: TimeCode.ymd(Date())) {
+            [weak self] stage, frac in
+            Task { @MainActor in self?.showProgress(jobID, stage, frac) }
+        }
+        let outcome = try await env.ingest.ingest(parsed)
+        j.format = "transcribed"
+        j.meetingID = outcome.meetingID
+        j.title = parsed.title
+        j.chunkCount = outcome.chunkCount
+        j.state = outcome.deduped ? .done : .done
+        j.message = outcome.deduped
+            ? "Already imported — this recording matches a call in your library."
+            : "Transcribed \(parsed.utterances.count) turns · \(parsed.speakers.count) speaker\(parsed.speakers.count == 1 ? "" : "s")."
+    }
+
+    /// Live progress for a transcribing job — updates the DISPLAY list in memory (not persisted per tick).
+    private func showProgress(_ jobID: String, _ stage: TranscriptionPipeline.Stage, _ frac: Double) {
+        guard let i = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        let label: String
+        switch stage {
+        case .decoding: label = "Reading audio…"
+        case .transcribing: label = frac < 0.1 ? "Transcribing (first run downloads the model)…" : "Transcribing… \(Int(frac * 100))%"
+        case .diarizing: label = "Identifying speakers…"
+        case .finishing: label = "Finishing…"
+        }
+        jobs[i].message = label
     }
 
     // MARK: - helpers
