@@ -143,9 +143,15 @@ public struct IngestEngine: Sendable {
                                  speakerConfidence: u.speakerConfidence, isInferredSpeaker: u.isInferredSpeaker,
                                  tStart: u.tStart, tEnd: u.tEnd, tsConfidence: u.tsConfidence.rawValue, text: u.text)
         }
-        // Atomic (Codex audit fix): meeting + chunks + embeddings + utterances persist in ONE
+        // Native on-device NER over the full text → searchable entity tags (people/orgs/places).
+        let fullText = parsed.utterances.map(\.text).joined(separator: "\n")
+        let entityInputs = EntityExtractor.extract(fullText).map {
+            Store.EntityInput(name: $0.name, kind: $0.kind.rawValue, count: $0.count)
+        }
+        // Atomic (Codex audit fix): meeting + chunks + embeddings + utterances + entities persist in ONE
         // transaction, so a failure can't leave a searchable but partially-embedded meeting.
-        try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs, utterances: uttInputs)
+        try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs,
+                              utterances: uttInputs, entities: entityInputs)
 
         return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: embInputs.count)
     }

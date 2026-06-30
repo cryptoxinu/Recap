@@ -128,6 +128,19 @@ public final class Store: @unchecked Sendable {
                 """)
             try db.execute(sql: "CREATE INDEX ix_import_jobs_created ON import_jobs(created_at DESC);")
         }
+        m.registerMigration("v4_entities") { db in
+            // Native-NER entities per meeting (Phase 2) → filter/search the library by person/org/place.
+            try db.execute(sql: """
+                CREATE TABLE meeting_entities (
+                  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                  name TEXT NOT NULL, kind TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1,
+                  name_lower TEXT NOT NULL,
+                  PRIMARY KEY (meeting_id, kind, name_lower)
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_entities_name ON meeting_entities(name_lower);")
+            try db.execute(sql: "CREATE INDEX ix_entities_meeting ON meeting_entities(meeting_id);")
+        }
         return m
     }()
 
@@ -197,11 +210,17 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// One extracted entity to persist with its meeting.
+    public struct EntityInput: Sendable, Equatable {
+        public let name: String; public let kind: String; public let count: Int
+        public init(name: String, kind: String, count: Int) { self.name = name; self.kind = kind; self.count = count }
+    }
+
     /// Persist a meeting, its chunks, AND their embeddings in ONE transaction (Codex audit fix:
     /// ingest must be atomic so a failure can't leave a searchable, partially-embedded meeting).
     /// FTS rows are maintained by triggers.
     public func saveMeeting(_ m: Meeting, chunks: [ChunkInput], embeddings: [EmbeddingInput] = [],
-                            utterances: [UtteranceInput] = []) throws {
+                            utterances: [UtteranceInput] = [], entities: [EntityInput] = []) throws {
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
@@ -231,6 +250,58 @@ public final class Store: @unchecked Sendable {
                     """, arguments: [u.id, u.meetingID, u.version, u.seq, u.speaker, u.personID,
                                      u.speakerConfidence, u.isInferredSpeaker ? 1 : 0,
                                      u.tStart, u.tEnd, u.tsConfidence, u.text])
+            }
+            for e in entities {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO meeting_entities (meeting_id, name, kind, count, name_lower)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, arguments: [m.id, e.name, e.kind, e.count, e.name.lowercased()])
+            }
+        }
+    }
+
+    // MARK: - entities (native NER)
+
+    public func entities(meetingID: String, limit: Int = 40) throws -> [Entity] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT name, kind, count FROM meeting_entities
+                WHERE meeting_id = ? ORDER BY count DESC, name ASC LIMIT ?
+                """, arguments: [meetingID, limit]).compactMap { r in
+                    guard let k = EntityKind(rawValue: r["kind"]) else { return nil }
+                    return Entity(name: r["name"], kind: k, count: r["count"] ?? 1)
+                }
+        }
+    }
+
+    /// Meetings that mention an entity (case-insensitive, substring) — cross-meeting entity search.
+    public func meetingsMentioning(_ name: String, limit: Int = 100) throws -> [MeetingRow] {
+        let needle = name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT DISTINCT m.id, m.title, m.date, m.source FROM meetings m
+                JOIN meeting_entities e ON e.meeting_id = m.id
+                WHERE e.name_lower LIKE ? ORDER BY m.date_epoch DESC LIMIT ?
+                """, arguments: ["%\(needle)%", limit]).map {
+                    MeetingRow(id: $0["id"], title: $0["title"], date: $0["date"], source: $0["source"])
+                }
+        }
+    }
+
+    /// Top entities across the whole library (for an overview / filter chips).
+    public func topEntities(kind: EntityKind? = nil, limit: Int = 30) throws -> [Entity] {
+        try dbQueue.read { db in
+            var sql = """
+                SELECT name, kind, SUM(count) AS total FROM meeting_entities
+                """
+            var args: [(any DatabaseValueConvertible)?] = []
+            if let kind { sql += " WHERE kind = ?"; args.append(kind.rawValue) }
+            sql += " GROUP BY kind, name_lower ORDER BY total DESC, name ASC LIMIT ?"
+            args.append(limit)
+            return try Row.fetchAll(db, sql: sql, arguments: StatementArguments(args)).compactMap { r in
+                guard let k = EntityKind(rawValue: r["kind"]) else { return nil }
+                return Entity(name: r["name"], kind: k, count: r["total"] ?? 1)
             }
         }
     }

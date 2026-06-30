@@ -9,6 +9,7 @@ struct MeetingDetailView: View {
     @State private var meeting: Store.MeetingRow?
     @State private var groups: [TurnGroup] = []
     @State private var noteLines: [String] = []      // populated for Gemini-notes meetings
+    @State private var people: [Entity] = []         // native-NER people mentioned
     @State private var highlightGroupID: Int?
 
     private var isNotes: Bool { meeting?.source == "gmeet_gemini" }
@@ -64,6 +65,12 @@ struct MeetingDetailView: View {
                     }
                 }
                 .font(.caption).foregroundStyle(.secondary)
+            }
+            if !people.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(people) { Chip(text: $0.name, icon: "person.fill") }
+                }
+                .padding(.top, 2)
             }
         }
     }
@@ -132,6 +139,10 @@ struct MeetingDetailView: View {
         let utts = (try? env.store.utterances(meetingID: meetingID)) ?? []
         if meeting?.source == "gmeet_gemini" {
             noteLines = utts.map(\.text)
+        } else {
+            // People mentioned (native NER) — only for transcripts; notes already list participants.
+            people = ((try? env.store.entities(meetingID: meetingID)) ?? [])
+                .filter { $0.kind == .person && $0.count >= 2 }.prefix(10).map { $0 }
         }
         let rows: [(speaker: String, t: Double?, inferred: Bool, text: String)]
         if utts.isEmpty {
