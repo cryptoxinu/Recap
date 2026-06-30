@@ -16,9 +16,15 @@ let package = Package(
     products: [
         .library(name: "CallBrainCore", targets: ["CallBrainCore"]),
     ],
+    dependencies: [
+        // SQLite (WAL + FTS5) source of truth. sqlite-vec/usearch graduate later; the V1 vector
+        // lane stores embeddings as BLOBs and does exact brute-force cosine in Swift (docs §0 D5/D6).
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+    ],
     targets: [
         .target(
             name: "CallBrainCore",
+            dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
