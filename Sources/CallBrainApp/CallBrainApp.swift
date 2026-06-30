@@ -1,7 +1,19 @@
 import SwiftUI
+import AppKit
+
+/// Without a packaged .app bundle, a SwiftPM SwiftUI executable launches as an accessory; promote it
+/// to a regular foreground app (Dock icon + a real window) so it behaves like the shipped app will.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
 
 @main
 struct CallBrainApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var env = AppEnvironment()
 
     var body: some Scene {
