@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CallBrainCore
 
 /// Auto-imports Fathom calls by polling the Fathom public API (api.fathom.ai) — connect once with a free
@@ -22,6 +23,9 @@ final class FathomConnect {
     private(set) var lastSyncCount = 0
 
     @ObservationIgnored private var autoSyncTask: Task<Void, Never>?
+    // Written only in init (main actor), read only in deinit (no concurrent access then).
+    @ObservationIgnored nonisolated(unsafe) private var foregroundObserver: NSObjectProtocol?
+    @ObservationIgnored private var lastForegroundSync = Date.distantPast
     private static let seenKey = "callbrain.fathomSeenIDs"
     private static let cursorKey = "callbrain.fathomResumeCursor"
     private static let seenCap = 6000
@@ -39,6 +43,21 @@ final class FathomConnect {
             Task { [weak self] in await self?.syncNow() }
             startAutoSync()
         }
+        // Pull the moment you bring CallBrain to the front — so right after a meeting, opening the app
+        // imports the new call immediately, without leaning on the timer.
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.onForeground() }
+        }
+    }
+
+    deinit { if let o = foregroundObserver { NotificationCenter.default.removeObserver(o) } }
+
+    private func onForeground() {
+        guard connected else { return }
+        if Date().timeIntervalSince(lastForegroundSync) < 120 { return }   // debounce rapid focus changes
+        lastForegroundSync = Date()
+        Task { [weak self] in await self?.syncNow() }
     }
 
     var isConfigured: Bool { connected }
@@ -81,7 +100,7 @@ final class FathomConnect {
         autoSyncTask?.cancel()
         autoSyncTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(900))   // every 15 min
+                try? await Task.sleep(for: .seconds(1800))   // background safety net every 30 min
                 if Task.isCancelled { break }
                 await self?.syncNow()
             }
