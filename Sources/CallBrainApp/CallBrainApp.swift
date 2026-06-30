@@ -50,7 +50,9 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 }
 
 struct RootView: View {
-    @State private var selection: SidebarItem? = .home
+    // Default tab; CALLBRAIN_TAB=<rawValue> opens straight to a tab (used for screenshot QA).
+    @State private var selection: SidebarItem? = SidebarItem(
+        rawValue: ProcessInfo.processInfo.environment["CALLBRAIN_TAB"] ?? "home") ?? .home
 
     var body: some View {
         NavigationSplitView {

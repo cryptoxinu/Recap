@@ -108,6 +108,26 @@ public final class Store: @unchecked Sendable {
                 """)
             try db.execute(sql: "CREATE INDEX ix_utt_meeting ON utterances(meeting_id, seq);")
         }
+        m.registerMigration("v3_import_jobs") { db in
+            // Durable import queue (Phase 2): a long archive backfill survives relaunch/crash, and the
+            // Import Queue UI shows pending/done/failed/needs-review. No FK to meetings — a job can fail
+            // before any meeting exists, and a meeting deletion shouldn't erase the import audit trail.
+            try db.execute(sql: """
+                CREATE TABLE import_jobs (
+                  id TEXT PRIMARY KEY,
+                  source_name TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  format TEXT,
+                  used_ai INTEGER NOT NULL DEFAULT 0,
+                  meeting_id TEXT,
+                  title TEXT,
+                  chunk_count INTEGER NOT NULL DEFAULT 0,
+                  message TEXT,
+                  created_at REAL NOT NULL
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_import_jobs_created ON import_jobs(created_at DESC);")
+        }
         return m
     }()
 
@@ -391,6 +411,49 @@ public final class Store: @unchecked Sendable {
                 ChunkHit(chunkID: r["chunk_id"], meetingID: r["meeting_id"],
                          speaker: r["speaker"], text: r["text"], bm25: 0)
             }
+        }
+    }
+
+    // MARK: - import jobs (durable queue)
+
+    public func upsertImportJob(_ j: ImportJob) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO import_jobs
+                (id, source_name, state, format, used_ai, meeting_id, title, chunk_count, message, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [j.id, j.sourceName, j.state.rawValue, j.format, j.usedAI ? 1 : 0,
+                                 j.meetingID, j.title, j.chunkCount, j.message, j.createdAt])
+        }
+    }
+
+    public func importJobs(limit: Int = 100) throws -> [ImportJob] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT id, source_name, state, format, used_ai, meeting_id, title, chunk_count, message, created_at
+                FROM import_jobs ORDER BY created_at DESC LIMIT ?
+                """, arguments: [limit]).map { r in
+                    let used: Int = r["used_ai"] ?? 0
+                    return ImportJob(
+                        id: r["id"], sourceName: r["source_name"],
+                        state: ImportJob.State(rawValue: r["state"]) ?? .failed,
+                        format: r["format"], usedAI: used != 0, meetingID: r["meeting_id"],
+                        title: r["title"], chunkCount: r["chunk_count"] ?? 0,
+                        message: r["message"], createdAt: r["created_at"] ?? 0)
+                }
+        }
+    }
+
+    public func deleteImportJob(id: String) throws {
+        try dbQueue.write { db in try db.execute(sql: "DELETE FROM import_jobs WHERE id = ?", arguments: [id]) }
+    }
+
+    /// Clear finished jobs (done + needsReview + failed); keep queued/running. Returns rows removed.
+    @discardableResult
+    public func clearFinishedImportJobs() throws -> Int {
+        try dbQueue.write { db in
+            try db.execute(sql: "DELETE FROM import_jobs WHERE state IN ('done','needsReview','failed')")
+            return db.changesCount
         }
     }
 

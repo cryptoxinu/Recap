@@ -13,6 +13,8 @@ final class AppEnvironment {
     let dataRoot: URL
     /// Non-nil when the primary database could not be opened (surfaced in the UI — never silent).
     let initError: String?
+    /// App-wide durable import queue (created at the end of init, once the store exists).
+    private(set) var importCoordinator: ImportCoordinator!
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -41,6 +43,7 @@ final class AppEnvironment {
 
         self.embedder = OllamaEmbedder()
         self.llm = ClaudeRunner(sandboxDir: sandbox.path)
+        self.importCoordinator = ImportCoordinator(env: self)
     }
 
     var search: SearchEngine { SearchEngine(store: store, embedder: embedder, space: space) }
