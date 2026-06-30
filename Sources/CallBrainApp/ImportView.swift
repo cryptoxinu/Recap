@@ -70,9 +70,13 @@ struct ImportView: View {
                 .font(.headline)
             Text(".docx · .txt · .srt · .vtt   ·   .mp4 · .mov · .m4a (transcribed on-device)")
                 .font(.caption).foregroundStyle(.secondary)
-            Button { chooseFiles() } label: { Label("Choose files…", systemImage: "folder") }
-                .buttonStyle(.bordered)
-                .padding(.top, 2)
+            HStack(spacing: 8) {
+                Button { chooseFiles() } label: { Label("Choose files…", systemImage: "doc") }
+                    .buttonStyle(.bordered)
+                Button { chooseFolder() } label: { Label("Import a folder…", systemImage: "folder") }
+                    .buttonStyle(.bordered)
+            }
+            .padding(.top, 2)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 34)
@@ -95,6 +99,20 @@ struct ImportView: View {
                                      .init(filenameExtension: "md"), .movie, .audio, .mpeg4Movie,
                                      .init(filenameExtension: "m4a")].compactMap { $0 }
         if panel.runModal() == .OK { coordinator.enqueueFiles(panel.urls) }
+    }
+
+    /// Archive migration: pick a folder; recursively enqueue every transcript/recording inside it.
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose a folder of transcripts and recordings — CallBrain imports them all."
+        if panel.runModal() == .OK, let folder = panel.url {
+            let n = coordinator.enqueueFolder(folder)
+            if n == 0 { coordinator.lastError = "No importable transcripts or recordings found in that folder." }
+        }
     }
 
     // MARK: paste
@@ -131,6 +149,17 @@ struct ImportView: View {
 
     // MARK: queue
 
+    /// "12 of 30 · 2 failed" — a glance at a large folder migration (Phase 7).
+    private var queueSummary: String {
+        let jobs = coordinator.jobs
+        guard jobs.count > 1 else { return "" }
+        let done = jobs.filter { $0.state == .done || $0.state == .needsReview }.count
+        let failed = jobs.filter { $0.state == .failed }.count
+        var s = "\(done) of \(jobs.count)"
+        if failed > 0 { s += " · \(failed) failed" }
+        return s
+    }
+
     @ViewBuilder private var queueSection: some View {
         if !coordinator.jobs.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
@@ -139,6 +168,7 @@ struct ImportView: View {
                     if coordinator.processing {
                         ProgressView().controlSize(.small).padding(.leading, 4)
                     }
+                    Text(queueSummary).font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Clear finished") { coordinator.clearFinished() }
                         .buttonStyle(.plain).font(.callout).foregroundStyle(.secondary)

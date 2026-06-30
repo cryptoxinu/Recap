@@ -49,6 +49,19 @@ final class ImportCoordinator {
         return enqueued
     }
 
+    /// Archive migration (Phase 7): recursively scan a folder for importable transcripts + recordings and
+    /// enqueue them all into this same durable, serially-paced queue. Returns how many were enqueued.
+    @discardableResult
+    func enqueueFolder(_ folder: URL) -> Int {
+        enqueueFiles(Self.scanFolder(folder))
+    }
+
+    /// All importable files under a directory (recursive), skipping hidden/package contents.
+    static func scanFolder(_ folder: URL, max: Int = 5000) -> [URL] {
+        FolderScanner.importableFiles(in: folder,
+                                      recognized: IngestEngine.readableExtensions.union(mediaExtensions), max: max)
+    }
+
     /// Returns false if the job couldn't be persisted (so the caller can keep the user's text).
     @discardableResult
     func enqueuePaste(_ text: String) -> Bool {
