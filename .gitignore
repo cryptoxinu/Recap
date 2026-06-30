@@ -32,6 +32,7 @@ data/models/**
 .DS_Store
 .build/
 .swiftpm/
+.cli-sandbox/
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/

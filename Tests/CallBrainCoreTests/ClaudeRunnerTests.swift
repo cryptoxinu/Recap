@@ -1,0 +1,91 @@
+import Testing
+import Foundation
+@testable import CallBrainCore
+
+@Suite("ClaudeRunner")
+struct ClaudeRunnerTests {
+
+    // Trimmed copy of a REAL `claude -p --output-format json` envelope captured on this machine
+    // (docs/research/cli-envelopes/claude-answer.json). Note the two models: an internal haiku
+    // helper (12 output tokens) and the answering sonnet (5) — the parser must pick sonnet.
+    static let envelope = """
+    {"type":"result","subtype":"success","is_error":false,"result":"pong","stop_reason":"end_turn",
+     "total_cost_usd":0.0080543,
+     "usage":{"input_tokens":3,"output_tokens":5,"cache_read_input_tokens":2131,"cache_creation_input_tokens":1127},
+     "modelUsage":{
+       "claude-haiku-4-5-20251001":{"inputTokens":509,"outputTokens":12,"costUSD":0.000569},
+       "claude-sonnet-4-6":{"inputTokens":3,"outputTokens":5,"costUSD":0.0074853}}}
+    """
+
+    @Test("answerArgs builds the verified tool-stripped, subscription-safe command")
+    func argsCore() {
+        let a = ClaudeRunner.answerArgs(model: "sonnet", system: "You are CallBrain.")
+        #expect(a.contains("-p"))
+        #expect(a.contains("--safe-mode"))                 // keeps OAuth, strips hooks/MCP/CLAUDE.md
+        #expect(a.contains("--strict-mcp-config"))
+        #expect(a.contains("--output-format"))
+        #expect(a.contains("json"))
+        // tool-stripped: "--tools" immediately followed by "" (no tools to call → injection-inert)
+        let i = a.firstIndex(of: "--tools")!
+        #expect(a[a.index(after: i)] == "")
+        #expect(a.contains("--system-prompt"))
+        #expect(a.contains("You are CallBrain."))
+        #expect(!a.contains("--bare"))                     // never (breaks subscription auth)
+        #expect(!a.contains("--dangerously-skip-permissions"))
+    }
+
+    @Test("answerArgs omits --system-prompt when there is no system text")
+    func argsNoSystem() {
+        let a = ClaudeRunner.answerArgs(model: "opus", system: nil)
+        #expect(!a.contains("--system-prompt"))
+        #expect(a.contains("opus"))
+    }
+
+    @Test("parseEnvelope picks the answering model (not the helper) + correct tokens/cost")
+    func parse() throws {
+        let c = try ClaudeRunner.parseEnvelope(Data(Self.envelope.utf8), requestedModel: "sonnet")
+        #expect(c.text == "pong")
+        #expect(c.provider == .claude)
+        #expect(c.model == "claude-sonnet-4-6")            // matched by output tokens (5), not haiku (12)
+        #expect(c.usage.outputTokens == 5)
+        #expect(c.usage.inputTokens == 3)
+        #expect(c.usage.cacheReadTokens == 2131)
+        #expect(abs(c.costUSD - 0.0080543) < 1e-9)         // total_cost_usd
+        #expect(c.stopReason == "end_turn")
+    }
+
+    @Test("parseEnvelope throws on an error envelope (never a silent empty answer)")
+    func parseError() {
+        let bad = #"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"hit a limit"}"#
+        #expect(throws: LLMError.self) {
+            try ClaudeRunner.parseEnvelope(Data(bad.utf8), requestedModel: "sonnet")
+        }
+    }
+
+    @Test("parseEnvelope rejects malformed JSON")
+    func parseMalformed() {
+        #expect(throws: LLMError.self) {
+            try ClaudeRunner.parseEnvelope(Data("not json".utf8), requestedModel: "sonnet")
+        }
+    }
+
+    @Test("rate-limit detection reads the stderr signal")
+    func rateLimit() {
+        #expect(ClaudeRunner.looksRateLimited("Error: usage limit reached") == true)
+        #expect(ClaudeRunner.looksRateLimited("HTTP 429 too many requests") == true)
+        #expect(ClaudeRunner.looksRateLimited("normal output") == false)
+    }
+
+    // Opt-in live smoke: actually spawns `claude -p` over your subscription. Run with:
+    //   CALLBRAIN_LIVE=1 swift test --filter ClaudeRunner
+    @Test("live claude smoke", .enabled(if: ProcessInfo.processInfo.environment["CALLBRAIN_LIVE"] == "1"))
+    func liveSmoke() async throws {
+        let sandbox = FileManager.default.temporaryDirectory.appendingPathComponent("cb-sandbox").path
+        try? FileManager.default.createDirectory(atPath: sandbox, withIntermediateDirectories: true)
+        let runner = ClaudeRunner(sandboxDir: sandbox)
+        let c = try await runner.complete(prompt: "Reply with exactly the single word: pong",
+                                          model: "sonnet", timeout: 90)
+        #expect(!c.text.isEmpty)
+        #expect(c.provider == .claude)
+    }
+}
