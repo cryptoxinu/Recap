@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var driveSetupShown = false
     @State private var driveClientID = ""
     @State private var driveClientSecret = ""
+    // Fathom setup
+    @State private var fathomKey = ""
 
     var body: some View {
         Form {
@@ -55,6 +57,7 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             driveSection
+            fathomSection
             Section("Reminders") {
                 Toggle("Daily action-item reminder", isOn: $taskReminders)
                     .onChange(of: taskReminders) { _, on in
@@ -92,6 +95,42 @@ struct SettingsView: View {
             primary = env.providerPrimary; taskReminders = NotificationManager.isEnabled
             if env.drive.connected, env.drive.availableFolders.isEmpty {
                 Task { await env.drive.loadFolders() }
+            }
+        }
+    }
+
+    @ViewBuilder private var fathomSection: some View {
+        Section("Fathom (auto-import calls)") {
+            let f = env.fathom!
+            if f.connected {
+                HStack {
+                    Button(f.syncing ? "Importing…" : "Sync now") { Task { await f.syncNow() } }
+                        .disabled(f.syncing)
+                    Button("Disconnect", role: .destructive) { f.disconnect() }
+                    Spacer()
+                    if f.lastSyncCount > 0 {
+                        Text("\(f.lastSyncCount) imported this session").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !f.status.isEmpty { Text(f.status).font(.caption).foregroundStyle(.secondary) }
+                Text("New Fathom calls import automatically in the background (about every 15 minutes) — "
+                     + "transcript + attendees, run through summaries, tasks, and categories. No per-call step.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                SecureField("Fathom API key", text: $fathomKey).textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Connect Fathom") {
+                        let k = fathomKey; fathomKey = ""
+                        Task { await env.fathom.connect(apiKey: k) }
+                    }
+                    .buttonStyle(.borderedProminent).disabled(fathomKey.isEmpty)
+                    Spacer()
+                }
+                if !f.status.isEmpty { Text(f.status).font(.caption).foregroundStyle(.secondary) }
+                Text("Get a free key in Fathom → Settings → Integrations → API Access → Generate API Key, then "
+                     + "paste it here. CallBrain then pulls in every new Fathom call on its own — no exporting, "
+                     + "no folders.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
     }

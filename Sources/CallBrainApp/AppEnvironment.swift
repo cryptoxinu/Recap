@@ -26,6 +26,8 @@ final class AppEnvironment {
     private(set) var drive: GoogleDriveConnect!
     /// Battery-aware serial lifecycle for the local summary model (one at a time, unloads when idle).
     private(set) var summaries: SummaryScheduler!
+    /// Fathom auto-import (polls the Fathom API) — dormant until the founder pastes an API key.
+    private(set) var fathom: FathomConnect!
     /// The global Ask-AI conversation, owned here (not by the view) so an in-flight answer keeps running in
     /// the background and survives navigating away and back (founder bug 2026-06-30).
     let askChat = ChatModel()
@@ -74,6 +76,7 @@ final class AppEnvironment {
         self.autoImport = FolderAutoImport(env: self)   // resumes watching a configured folder, if any
         self.drive = GoogleDriveConnect(env: self)      // dormant unless the founder connected Google Drive
         self.summaries = SummaryScheduler(env: self)    // battery-aware local-summary lifecycle
+        self.fathom = FathomConnect(env: self)          // dormant unless the founder connected Fathom
     }
 
     static let providerKey = "callbrain.providerPrimary"
