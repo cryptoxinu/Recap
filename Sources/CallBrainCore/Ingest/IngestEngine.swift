@@ -30,6 +30,12 @@ public struct IngestEngine: Sendable {
     public func ingestFathom(_ text: String) async throws -> Outcome {
         try await ingest(FathomParser.parse(text))
     }
+    public func ingestFirefliesCopy(_ text: String) async throws -> Outcome {
+        try await ingest(FirefliesCopyParser.parse(text))
+    }
+    public func ingestGeminiNotes(_ text: String, title: String? = nil, date: String? = nil) async throws -> Outcome {
+        try await ingest(GeminiNotesParser.parse(text, title: title, date: date))
+    }
 
     /// Persist a parsed transcript end-to-end and return what landed.
     public func ingest(_ parsed: ParsedTranscript) async throws -> Outcome {
