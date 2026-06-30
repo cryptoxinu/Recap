@@ -67,6 +67,9 @@ struct TasksView: View {
         }
         .navigationTitle("Tasks")
         .task(id: filter) { load() }
+        .task {   // Screenshot QA: CALLBRAIN_TIDY=1 auto-runs the AI reconcile once.
+            if ProcessInfo.processInfo.environment["CALLBRAIN_TIDY"] == "1", tidySummary == nil { tidy() }
+        }
         .sheet(item: $openMeetingID) { id in
             NavigationStack {
                 MeetingDetailView(meetingID: id)
