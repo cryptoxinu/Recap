@@ -94,7 +94,7 @@ real morning sync.
 (NaturalLanguage), Fireflies-style notes rendering. **Dual audit** (Codex + swift-macos-sme) → all
 HIGH/MED/LOW fixed (+9 regression tests, 82 green). Deferred-not-creep: SRT/VTT + Cluely parsers, Meet
 sibling-pairing (fold into Phase 3/6). Audit: `docs/audits/phase2-audit.md`.
-**Phase 3** — Local transcription: AVFoundation → WhisperKit + FluidAudio diarization (raw Meet video).
+**Phase 3 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** raw recordings → AVFoundation decode → WhisperKit + FluidAudio diarization → midpoint-aligned CTM → gmeet_local meeting. Drop-to-transcribe in Import w/ live progress. LIVE-verified end-to-end (real video → 2 speakers → transcript → ingest) on M4 Max. Gate: 2 HIGH+5 MED+1 LOW fixed (docs/audits/phase3-audit.md). (112 green.)
 **Phase 4 — ✅ COMPLETE + Codex gate PASS (2026-06-30):** hard date-gating (QueryPlanner + refuse-out-of-
   window), action items → **Tasks view** (16 real tasks live), **anti-hallucination eval harness** (live
   3/3: citation precision, no out-of-window leak, grounded refusal, dangling-tag check), 5 ask modes.
