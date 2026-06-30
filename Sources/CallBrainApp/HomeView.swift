@@ -6,15 +6,24 @@ struct HomeView: View {
     @State private var meetings: [Store.MeetingRow] = []
 
     private var greeting: String {
-        let h = Calendar.current.component(.hour, from: Date())
-        switch h {
-        case 5..<12: return "Good morning"
-        case 12..<17: return "Good afternoon"
-        default: return "Good evening"
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: "Good morning"
+        case 12..<17: "Good afternoon"
+        default: "Good evening"
         }
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            mainColumn
+            Divider()
+            askColumn
+        }
+        .navigationTitle("Home")
+        .task { meetings = env.recentMeetings() }
+    }
+
+    private var mainColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("\(greeting) 🌙").font(.largeTitle).bold()
@@ -37,7 +46,7 @@ struct HomeView: View {
                 } else {
                     VStack(spacing: 0) {
                         ForEach(meetings.prefix(12)) { m in
-                            HStack {
+                            HStack(spacing: 10) {
                                 Image(systemName: "waveform.circle.fill").foregroundStyle(Theme.accent)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(m.title).bold().lineLimit(1)
@@ -55,15 +64,24 @@ struct HomeView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("Home")
-        .task { meetings = env.recentMeetings() }
+    }
+
+    private var askColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Ask your calls")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 4)
+            AskPanel(compact: true)
+        }
+        .frame(width: 372)
+        .background(Theme.cardFill.opacity(0.35))
     }
 
     private func statCard(_ title: String, _ value: String, _ icon: String, _ tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(tint)
+                .font(.title3).foregroundStyle(tint)
                 .frame(width: 38, height: 38)
                 .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
             Text(value).font(.title3).bold()
