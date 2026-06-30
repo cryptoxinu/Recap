@@ -11,6 +11,8 @@ final class AppEnvironment {
     let llm: ClaudeRunner
     let space = "nomic__v1"
     let dataRoot: URL
+    /// Non-nil when the primary database could not be opened (surfaced in the UI — never silent).
+    let initError: String?
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -18,10 +20,25 @@ final class AppEnvironment {
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         let sandbox = base.appendingPathComponent("cli-sandbox", isDirectory: true)
         try? FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
-
         self.dataRoot = base
-        self.store = (try? Store(path: base.appendingPathComponent("callbrain.sqlite3").path))
-            ?? (try! Store(path: NSTemporaryDirectory() + "callbrain-fallback.sqlite3"))
+
+        let path = base.appendingPathComponent("callbrain.sqlite3").path
+        do {
+            self.store = try Store(path: path)
+            self.initError = nil
+        } catch {
+            // Don't silently swallow: fall back to a UNIQUE temp store so the app still launches, and
+            // surface the failure so the user knows imports won't persist (Codex Phase-1 fix).
+            let tmp = NSTemporaryDirectory() + "callbrain-fallback-\(UUID().uuidString).sqlite3"
+            do {
+                self.store = try Store(path: tmp)
+            } catch {
+                fatalError("CallBrain could not open any database (primary: \(path); fallback: \(tmp)): \(error)")
+            }
+            self.initError = "Couldn't open your CallBrain database (\(error.localizedDescription)). "
+                + "Using a temporary store — imports won't be saved. Quit and relaunch, or check the data folder in Settings."
+        }
+
         self.embedder = OllamaEmbedder()
         self.llm = ClaudeRunner(sandboxDir: sandbox.path)
     }

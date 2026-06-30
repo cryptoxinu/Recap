@@ -28,6 +28,14 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("\(greeting) 🌙").font(.largeTitle).bold()
 
+                if let err = env.initError {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(.orange.opacity(0.12)))
+                }
+
                 HStack(spacing: 14) {
                     statCard("Calls indexed", "\(meetings.count)", "calendar", Theme.accent)
                     statCard("Ask AI", "Ready", "sparkles", .pink)

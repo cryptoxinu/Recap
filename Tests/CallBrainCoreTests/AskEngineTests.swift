@@ -31,6 +31,13 @@ struct AskEngineTests {
         #expect(ans.provider == nil)          // never reached the provider
     }
 
+    @Test("referencedTags extracts only valid [S#] markers")
+    func referencedTags() {
+        let t = "Confirmed [S2]. Also [S6] and [S10]. Not [SX], not bare S5, not [s2]."
+        #expect(AskEngine.referencedTags(in: t) == ["S2", "S6", "S10"])
+        #expect(AskEngine.referencedTags(in: "no tags here").isEmpty)
+    }
+
     // The money shot: real embeddings (Ollama) + real answer (claude), end to end.
     //   CALLBRAIN_LIVE=1 swift test --filter AskEngine
     @Test("LIVE end-to-end: ingest → ask → grounded cited answer",

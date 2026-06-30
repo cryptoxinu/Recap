@@ -73,10 +73,28 @@ public struct AskEngine: Sendable {
             return Answer(status: .noSources, text: "No sourced evidence found.",
                           citations: [], provider: .claude, model: completion.model)
         }
-        // Keep the citations actually referenced; if the model cited none, fall back to all offered.
-        let used = refs.filter { text.contains("[\($0.tag)]") }
-        return Answer(status: .answered, text: text,
-                      citations: used.isEmpty ? refs : used,
+        // Citation validation (anti-hallucination, Codex Phase-1 fix): keep ONLY refs that were actually
+        // cited with a VALID [S#] tag. If the model grounded nothing valid in the sources, refuse rather
+        // than present unsourced text or attach all sources as if cited.
+        let referenced = Self.referencedTags(in: text)
+        let cited = refs.filter { referenced.contains($0.tag) }
+        guard !cited.isEmpty else {
+            return Answer(status: .noSources,
+                          text: "I couldn't ground an answer to that in your calls — try rephrasing or importing more.",
+                          citations: [], provider: .claude, model: completion.model)
+        }
+        return Answer(status: .answered, text: text, citations: cited,
                       provider: .claude, model: completion.model)
+    }
+
+    /// The set of `S#` tags the answer actually references (from `[S#]` markers).
+    static func referencedTags(in text: String) -> Set<String> {
+        guard let re = try? NSRegularExpression(pattern: #"\[(S\d+)\]"#) else { return [] }
+        let ns = text as NSString
+        var tags = Set<String>()
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            tags.insert(ns.substring(with: m.range(at: 1)))
+        }
+        return tags
     }
 }
