@@ -37,6 +37,15 @@ public struct IngestEngine: Sendable {
         try await ingest(GeminiNotesParser.parse(text, title: title, date: date))
     }
 
+    /// "Paste anything" import: an `AIImporter` resolves a raw dump (known format → deterministic,
+    /// else AI), names it, and this stores it. Returns the resolved format + whether AI was used.
+    public func ingestRaw(_ raw: String, importer: AIImporter,
+                          generateTitleIfMissing: Bool = true) async throws -> (Outcome, AIImporter.Resolved) {
+        let resolved = try await importer.resolve(raw, generateTitleIfMissing: generateTitleIfMissing)
+        let outcome = try await ingest(resolved.transcript)
+        return (outcome, resolved)
+    }
+
     /// Persist a parsed transcript end-to-end and return what landed.
     public func ingest(_ parsed: ParsedTranscript) async throws -> Outcome {
         let meetingID = "m_" + UUID().uuidString

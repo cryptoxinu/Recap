@@ -125,4 +125,63 @@ public actor ClaudeRunner {
         }
         return try Self.parseEnvelope(Data(out.stdout.utf8), requestedModel: model)
     }
+
+    /// Structured extraction: returns the model's JSON output as a STRING (Sendable across the actor
+    /// boundary; the caller parses it). Uses `--json-schema` to constrain the output.
+    public func completeJSON(prompt: String, system: String?, schema: String,
+                             model: String = "sonnet", timeout: TimeInterval = 180) async throws -> String {
+        guard FileManager.default.isExecutableFile(atPath: executablePath) else {
+            throw LLMError.notInstalled(executablePath)
+        }
+        let out = try await Subprocess.run(
+            executable: executablePath,
+            args: Self.answerArgs(model: model, system: system) + ["--json-schema", schema],
+            stdin: prompt, cwd: sandboxDir, scrub: Self.scrubbedEnv, timeout: timeout)
+        if out.exitCode != 0 {
+            if Self.looksRateLimited(out.stderr) { throw LLMError.rateLimited(resetAt: nil) }
+            throw LLMError.nonZeroExit(code: out.exitCode, stderr: String(out.stderr.prefix(500)))
+        }
+        return try Self.extractStructuredJSON(out.stdout)
+    }
+
+    /// Pull the JSON payload out of a `claude --output-format json --json-schema` envelope: prefer the
+    /// `structured_output` object; otherwise extract the first balanced JSON value from `.result`.
+    static func extractStructuredJSON(_ stdout: String) throws -> String {
+        guard let data = stdout.data(using: .utf8),
+              let env = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.decodeFailed("claude json: envelope not parseable")
+        }
+        if env["is_error"] as? Bool == true {
+            throw LLMError.providerError(subtype: env["subtype"] as? String ?? "error",
+                                         detail: env["result"] as? String ?? "")
+        }
+        if let so = env["structured_output"], JSONSerialization.isValidJSONObject(so),
+           let d = try? JSONSerialization.data(withJSONObject: so) {
+            return String(decoding: d, as: UTF8.self)
+        }
+        if let result = env["result"] as? String, let json = extractJSONValue(result) {
+            return json
+        }
+        throw LLMError.decodeFailed("claude json: no structured_output or JSON found in result")
+    }
+
+    /// First balanced `{…}`/`[…]` value in a string (after stripping ``` fences). Good enough for
+    /// model output; the `--json-schema` path normally returns clean `structured_output` anyway.
+    static func extractJSONValue(_ s: String) -> String? {
+        let t = s.replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
+        guard let start = t.firstIndex(where: { $0 == "{" || $0 == "[" }) else { return nil }
+        let open = t[start]
+        let close: Character = (open == "{") ? "}" : "]"
+        var depth = 0
+        var i = start
+        while i < t.endIndex {
+            let c = t[i]
+            if c == open { depth += 1 } else if c == close {
+                depth -= 1
+                if depth == 0 { return String(t[start...i]) }
+            }
+            i = t.index(after: i)
+        }
+        return nil
+    }
 }
