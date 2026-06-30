@@ -23,7 +23,7 @@ struct MeetingsView: View {
                         NavigationLink(value: m.id) { row(m) }
                     }
                     .navigationDestination(for: String.self) { id in
-                        MeetingDetailView(meetingID: id)
+                        MeetingWorkspaceView(meetingID: id)
                     }
                 }
             }

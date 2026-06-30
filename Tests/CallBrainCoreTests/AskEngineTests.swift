@@ -51,6 +51,16 @@ struct AskEngineTests {
         #expect(ans.text.contains("this week"))
     }
 
+    @Test("ask(inMeeting:) on a meeting with no chunks refuses WITHOUT the LLM")
+    func meetingScopedEmptyRefuses() async throws {
+        let store = try freshStore()
+        let search = SearchEngine(store: store, embedder: StubEmbedder(), space: "stub__v1")
+        let ask = AskEngine(search: search, llm: ClaudeRunner(executablePath: "/nonexistent", sandboxDir: sandbox()))
+        let ans = try await ask.ask("summarize this call", inMeeting: "nope")
+        #expect(ans.status == .noSources)
+        #expect(ans.provider == nil)
+    }
+
     @Test("referencedTags extracts only valid [S#] markers")
     func referencedTags() {
         let t = "Confirmed [S2]. Also [S6] and [S10]. Not [SX], not bare S5, not [s2]."

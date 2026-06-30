@@ -32,12 +32,19 @@ struct AskPanel: View {
     @State private var query = ""
     @State private var sheet: MeetingRef?
 
-    static let suggestions = [
+    static let globalSuggestions = [
         "What are my action items this week?",
         "What did Max explain about TEEs?",
         "What is the status of BitRouter?",
         "What pricing did we decide for amp code?",
     ]
+    static let meetingSuggestions = [
+        "Summarize this call",
+        "What are the action items?",
+        "What decisions were made?",
+        "What should I follow up on?",
+    ]
+    private var suggestions: [String] { model.meetingID == nil ? Self.globalSuggestions : Self.meetingSuggestions }
 
     private var messages: [AskMessage] { model.messages }
     private var busy: Bool { model.busy }
@@ -60,14 +67,14 @@ struct AskPanel: View {
         VStack(spacing: compact ? 10 : 14) {
             Image(systemName: "sparkles")
                 .font(.system(size: compact ? 26 : 38)).foregroundStyle(Theme.accent)
-            Text(compact ? "Ask your calls" : "Ask anything across your calls")
+            Text(model.meetingID != nil ? "Ask about this call" : (compact ? "Ask your calls" : "Ask anything across your calls"))
                 .font(compact ? .headline : .title2).bold().multilineTextAlignment(.center)
             if !compact {
                 Text("Grounded answers with citations — it refuses rather than guess.")
                     .foregroundStyle(.secondary)
             }
             VStack(spacing: 8) {
-                ForEach(Self.suggestions, id: \.self) { s in
+                ForEach(suggestions, id: \.self) { s in
                     Button { ask(s) } label: {
                         Label(s, systemImage: "arrow.up.forward")
                             .font(compact ? .callout : .body)

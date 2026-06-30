@@ -67,7 +67,7 @@ struct RootView: View {
         } detail: {
             // CALLBRAIN_MEETING=<id> opens straight to a meeting detail (screenshot QA only).
             if let mid = ProcessInfo.processInfo.environment["CALLBRAIN_MEETING"], !mid.isEmpty {
-                MeetingDetailView(meetingID: mid)
+                MeetingWorkspaceView(meetingID: mid)
             } else {
                 switch selection ?? .home {
                 case .home: HomeView()
