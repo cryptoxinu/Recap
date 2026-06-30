@@ -85,9 +85,16 @@ public struct IngestEngine: Sendable {
                                  modelID: embedder.modelID, vector: vectors[i],
                                  contentHash: "sha256:" + Self.sha256(ch.text))
         }
-        // Atomic (Codex audit fix): meeting + chunks + embeddings persist in ONE transaction, so a
-        // failure can't leave a searchable but partially-embedded meeting.
-        try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs)
+        // Persist the individual speaker turns too (the readable Transcript Viewer unit).
+        let uttInputs = utterances.map { u in
+            Store.UtteranceInput(id: u.id, meetingID: meetingID, version: u.version, seq: u.seq,
+                                 speaker: u.speakerRaw, personID: u.personID,
+                                 speakerConfidence: u.speakerConfidence, isInferredSpeaker: u.isInferredSpeaker,
+                                 tStart: u.tStart, tEnd: u.tEnd, tsConfidence: u.tsConfidence.rawValue, text: u.text)
+        }
+        // Atomic (Codex audit fix): meeting + chunks + embeddings + utterances persist in ONE
+        // transaction, so a failure can't leave a searchable but partially-embedded meeting.
+        try store.saveMeeting(meeting, chunks: inputs, embeddings: embInputs, utterances: uttInputs)
 
         return Outcome(meetingID: meetingID, chunkCount: inputs.count, embedded: embInputs.count)
     }

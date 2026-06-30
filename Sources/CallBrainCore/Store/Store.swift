@@ -92,6 +92,22 @@ public final class Store: @unchecked Sendable {
                 );
                 """)
         }
+        m.registerMigration("v2_utterances") { db in
+            // Individual speaker turns (the readable, Fireflies-style transcript unit) — persisted
+            // alongside the packed retrieval chunks so the Transcript Viewer renders turn-by-turn.
+            try db.execute(sql: """
+                CREATE TABLE utterances (
+                  utterance_id TEXT PRIMARY KEY,
+                  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                  version INTEGER NOT NULL DEFAULT 0, seq INTEGER NOT NULL,
+                  speaker TEXT, person_id TEXT,
+                  speaker_confidence REAL, is_inferred_speaker INTEGER NOT NULL DEFAULT 0,
+                  start_timestamp REAL, end_timestamp REAL, ts_confidence TEXT,
+                  text TEXT NOT NULL
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_utt_meeting ON utterances(meeting_id, seq);")
+        }
         return m
     }()
 
@@ -137,10 +153,35 @@ public final class Store: @unchecked Sendable {
         }
     }
 
+    /// One speaker turn to persist (the readable transcript unit).
+    public struct UtteranceInput: Sendable, Equatable {
+        public let id: String
+        public let meetingID: String
+        public let version: Int
+        public let seq: Int
+        public let speaker: String?
+        public let personID: String?
+        public let speakerConfidence: Double?
+        public let isInferredSpeaker: Bool
+        public let tStart: Double?
+        public let tEnd: Double?
+        public let tsConfidence: String?
+        public let text: String
+        public init(id: String, meetingID: String, version: Int, seq: Int, speaker: String?,
+                    personID: String? = nil, speakerConfidence: Double? = nil, isInferredSpeaker: Bool = false,
+                    tStart: Double?, tEnd: Double?, tsConfidence: String?, text: String) {
+            self.id = id; self.meetingID = meetingID; self.version = version; self.seq = seq
+            self.speaker = speaker; self.personID = personID; self.speakerConfidence = speakerConfidence
+            self.isInferredSpeaker = isInferredSpeaker; self.tStart = tStart; self.tEnd = tEnd
+            self.tsConfidence = tsConfidence; self.text = text
+        }
+    }
+
     /// Persist a meeting, its chunks, AND their embeddings in ONE transaction (Codex audit fix:
     /// ingest must be atomic so a failure can't leave a searchable, partially-embedded meeting).
     /// FTS rows are maintained by triggers.
-    public func saveMeeting(_ m: Meeting, chunks: [ChunkInput], embeddings: [EmbeddingInput] = []) throws {
+    public func saveMeeting(_ m: Meeting, chunks: [ChunkInput], embeddings: [EmbeddingInput] = [],
+                            utterances: [UtteranceInput] = []) throws {
         try dbQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO meetings (id, title, date, start_time, duration, source, company, content_hash, updated_at)
@@ -160,6 +201,16 @@ public final class Store: @unchecked Sendable {
                     INSERT OR REPLACE INTO embeddings (chunk_id, space, dim, model_id, vector, content_hash)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """, arguments: [e.chunkID, e.space, e.dim, e.modelID, VectorMath.encode(e.vector), e.contentHash])
+            }
+            for u in utterances {   // after the meeting row exists (FK)
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO utterances
+                    (utterance_id, meeting_id, version, seq, speaker, person_id, speaker_confidence,
+                     is_inferred_speaker, start_timestamp, end_timestamp, ts_confidence, text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, arguments: [u.id, u.meetingID, u.version, u.seq, u.speaker, u.personID,
+                                     u.speakerConfidence, u.isInferredSpeaker ? 1 : 0,
+                                     u.tStart, u.tEnd, u.tsConfidence, u.text])
             }
         }
     }
@@ -286,6 +337,30 @@ public final class Store: @unchecked Sendable {
                 """, arguments: [meetingID]).map {
                     TranscriptRow(id: $0["chunk_id"], speaker: $0["speaker"],
                                   tStart: $0["start_timestamp"], text: $0["text"])
+                }
+        }
+    }
+
+    public struct UtteranceRow: Sendable, Equatable, Identifiable {
+        public let id: String
+        public let speaker: String?
+        public let tStart: Double?
+        public let isInferred: Bool
+        public let text: String
+    }
+
+    /// Ordered speaker turns for a meeting (the readable transcript). Falls back to chunks if a meeting
+    /// was ingested before utterances were persisted.
+    public func utterances(meetingID: String) throws -> [UtteranceRow] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT utterance_id, speaker, start_timestamp, is_inferred_speaker, text FROM utterances
+                WHERE meeting_id = ? ORDER BY seq
+                """, arguments: [meetingID]).map { row -> UtteranceRow in
+                    let inferred: Int = row["is_inferred_speaker"] ?? 0
+                    return UtteranceRow(id: row["utterance_id"], speaker: row["speaker"],
+                                        tStart: row["start_timestamp"], isInferred: inferred != 0,
+                                        text: row["text"])
                 }
         }
     }
