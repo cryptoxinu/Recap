@@ -25,10 +25,11 @@ final class FathomConnect {
     private static let seenKey = "callbrain.fathomSeenIDs"
     private static let cursorKey = "callbrain.fathomResumeCursor"
     private static let seenCap = 6000
-    /// Small `created_after` safety margin (clock skew); the watermark logic, not this, handles delays.
-    private static let lookback: TimeInterval = 3600
-    /// Stop blocking the watermark on a call whose transcript still hasn't appeared after this long.
-    private static let transcriptGiveUp: TimeInterval = 3 * 86_400
+    /// Steady-state we re-scan a window back from the last FULL sync — wide enough to cover a transcript
+    /// that wasn't ready yet AND any time the app was closed. The seen-id set (+ ingest content-dedupe) is
+    /// the source of truth for "already imported", so re-scanning is free of duplicates; this window only
+    /// bounds how far back we look.
+    private static let window: TimeInterval = 3 * 86_400
 
     init(env: AppEnvironment) {
         self.env = env
@@ -90,9 +91,12 @@ final class FathomConnect {
     func syncNow() async {
         guard connected, !syncing, let creds = store.load() else { return }
         syncing = true; defer { syncing = false }
+        let startTime = Date()
         let resume = UserDefaults.standard.string(forKey: Self.cursorKey)
-        // When resuming a backlog the cursor already carries the query; otherwise fetch since the watermark.
-        let since = resume != nil ? nil : creds.lastSync.map { $0.addingTimeInterval(-Self.lookback) }
+        // While draining a backlog the cursor carries the query. First-ever sync → full history. Steady
+        // state → a window back from the last FULL sync (covers transcript delay + any downtime). The
+        // seen-set, not a fragile per-call watermark, guarantees no double-import.
+        let since: Date? = resume != nil ? nil : creds.lastSync.map { $0.addingTimeInterval(-Self.window) }
         do {
             let page = try await client.fetch(since: since, startCursor: resume)
             guard connected, store.load() != nil else { return }       // disconnected mid-fetch (audit HIGH)
@@ -100,16 +104,10 @@ final class FathomConnect {
             var seen = Set(UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? [])
             var seenOrder = UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? []
             var imported = 0
-            var newestProcessed = creds.lastSync
-            var oldestPending: Date?
-            let giveUp = Date().addingTimeInterval(-Self.transcriptGiveUp)
-            func bump(_ d: Date?) { if let d, d > (newestProcessed ?? .distantPast) { newestProcessed = d } }
-            func wait(_ d: Date?) { if let d, d > giveUp { oldestPending = oldestPending.map { min($0, d) } ?? d } }
-
             for m in page.meetings.sorted(by: { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }) {
                 guard connected else { break }
-                if m.lines.isEmpty { wait(m.createdAt); continue }      // transcript not ready → keep window open
-                if seen.contains(m.id) { bump(m.createdAt); continue }
+                if m.lines.isEmpty { continue }                        // transcript not ready → re-scanned next poll
+                if seen.contains(m.id) { continue }
                 do {
                     let outcome = try await env.ingest.ingest(m.toParsedTranscript())
                     guard connected, store.load() != nil else { return }   // disconnected mid-loop (audit HIGH)
@@ -120,28 +118,23 @@ final class FathomConnect {
                         env.classifyInBackground(outcome.meetingID)
                         imported += 1
                     }
-                    bump(m.createdAt)
                 } catch {
-                    wait(m.createdAt)   // one bad call can't abort the rest; stays retryable (audit MED)
+                    continue   // one bad call can't abort the rest; it's re-scanned next poll within the window
                 }
             }
 
-            // Pagination: drained → clear the resume cursor; truncated/429 → keep it for next poll.
-            if page.complete { UserDefaults.standard.removeObject(forKey: Self.cursorKey) }
-            else { UserDefaults.standard.set(page.nextCursor, forKey: Self.cursorKey) }
-
-            // Watermark advances ONLY when the window was fully drained, and never past an unresolved call
-            // (audit CRITICAL ×2). Incomplete pass → keep the old watermark; the resume cursor gets the rest.
-            var watermark = creds.lastSync
-            if page.complete {
-                watermark = newestProcessed ?? creds.lastSync
-                if let pending = oldestPending { watermark = min(watermark ?? .distantPast, pending) }
-            }
-
-            guard connected, let cur = store.load() else { return }    // re-check before persisting (audit HIGH)
+            // Persist only after re-confirming we're still connected (audit HIGH — no resurrection on disconnect).
+            guard connected, let cur = store.load() else { return }
             if seenOrder.count > Self.seenCap { seenOrder = Array(seenOrder.suffix(Self.seenCap)) }
             UserDefaults.standard.set(seenOrder, forKey: Self.seenKey)
-            store.save(FathomCredentials(apiKey: cur.apiKey, lastSync: watermark))
+            if page.complete {
+                UserDefaults.standard.removeObject(forKey: Self.cursorKey)
+                // Forward-only watermark — the START of a fully-drained sync, never moving backward.
+                let advanced = max(cur.lastSync ?? .distantPast, startTime)
+                store.save(FathomCredentials(apiKey: cur.apiKey, lastSync: advanced))
+            } else {
+                UserDefaults.standard.set(page.nextCursor, forKey: Self.cursorKey)   // keep draining; don't advance
+            }
             lastSyncCount += imported
             status = imported == 0
                 ? (page.complete ? "Up to date." : "Importing more…")
