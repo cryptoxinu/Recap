@@ -162,6 +162,26 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "CREATE INDEX ix_tasks_status ON tasks(status);")
             try db.execute(sql: "CREATE INDEX ix_tasks_meeting ON tasks(meeting_id);")
         }
+        m.registerMigration("v7_conversations") { db in
+            // Durable chat sessions (Phase 4.5) → the "Recents" rail. Messages cascade-delete with their
+            // conversation; a meeting_id (nullable) scopes a per-meeting AskFred thread.
+            try db.execute(sql: """
+                CREATE TABLE conversations (
+                  id TEXT PRIMARY KEY, title TEXT NOT NULL, meeting_id TEXT,
+                  created_at REAL NOT NULL, updated_at REAL NOT NULL
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_conv_updated ON conversations(updated_at DESC);")
+            try db.execute(sql: "CREATE INDEX ix_conv_meeting ON conversations(meeting_id);")
+            try db.execute(sql: """
+                CREATE TABLE messages (
+                  id TEXT PRIMARY KEY,
+                  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                  role TEXT NOT NULL, text TEXT NOT NULL, citations_json TEXT, created_at REAL NOT NULL
+                );
+                """)
+            try db.execute(sql: "CREATE INDEX ix_msg_conv ON messages(conversation_id, created_at);")
+        }
         return m
     }()
 
@@ -676,6 +696,96 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "DELETE FROM import_jobs WHERE state IN ('done','failed')")
             return db.changesCount
         }
+    }
+
+    // MARK: - conversations (durable chat sessions)
+
+    public func upsertConversation(_ c: Conversation) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO conversations (id, title, meeting_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """, arguments: [c.id, c.title, c.meetingID, c.createdAt, c.updatedAt])
+        }
+    }
+
+    /// Conversations newest-activity first. `meetingID` filters to a meeting's threads; pass nil for the
+    /// global Ask "Recents", or omit (`.some(nil)` vs absent) — here absent = all, nil-string-filter via
+    /// the dedicated method below.
+    public func conversations(limit: Int = 100) throws -> [Conversation] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: "SELECT * FROM conversations ORDER BY updated_at DESC LIMIT ?",
+                             arguments: [limit]).map(Self.decodeConversation)
+        }
+    }
+
+    /// Global (non-meeting) conversations only — the Ask-AI Recents rail.
+    public func globalConversations(limit: Int = 100) throws -> [Conversation] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT * FROM conversations WHERE meeting_id IS NULL ORDER BY updated_at DESC LIMIT ?",
+                arguments: [limit]).map(Self.decodeConversation)
+        }
+    }
+
+    public func conversations(meetingID: String, limit: Int = 50) throws -> [Conversation] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT * FROM conversations WHERE meeting_id = ? ORDER BY updated_at DESC LIMIT ?",
+                arguments: [meetingID, limit]).map(Self.decodeConversation)
+        }
+    }
+
+    public func conversation(id: String) throws -> Conversation? {
+        try dbQueue.read { db in
+            try Row.fetchOne(db, sql: "SELECT * FROM conversations WHERE id = ?", arguments: [id])
+                .map(Self.decodeConversation)
+        }
+    }
+
+    public func renameConversation(id: String, title: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE conversations SET title = ? WHERE id = ?", arguments: [title, id])
+        }
+    }
+
+    public func deleteConversation(id: String) throws {
+        try dbQueue.write { db in try db.execute(sql: "DELETE FROM conversations WHERE id = ?", arguments: [id]) }
+    }
+
+    /// Append a message and bump its conversation's `updated_at` in ONE transaction (Recents ordering
+    /// stays consistent with the latest turn).
+    public func appendMessage(_ msg: Message) throws {
+        let json = (try? JSONEncoder().encode(msg.citations)).flatMap { String(data: $0, encoding: .utf8) }
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO messages (id, conversation_id, role, text, citations_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, arguments: [msg.id, msg.conversationID, msg.role.rawValue, msg.text, json, msg.createdAt])
+            try db.execute(sql: "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                           arguments: [msg.createdAt, msg.conversationID])
+        }
+    }
+
+    public func messages(conversationID: String) throws -> [Message] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at", arguments: [conversationID])
+                .map(Self.decodeMessage)
+        }
+    }
+
+    private static func decodeConversation(_ r: Row) -> Conversation {
+        Conversation(id: r["id"], title: r["title"], meetingID: r["meeting_id"],
+                     createdAt: r["created_at"] ?? 0, updatedAt: r["updated_at"] ?? 0)
+    }
+    private static func decodeMessage(_ r: Row) -> Message {
+        let cites: [StoredCitation] = (r["citations_json"] as String?)
+            .flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode([StoredCitation].self, from: $0) } ?? []
+        return Message(id: r["id"], conversationID: r["conversation_id"],
+                       role: Message.Role(rawValue: r["role"]) ?? .user, text: r["text"],
+                       citations: cites, createdAt: r["created_at"] ?? 0)
     }
 
     // MARK: - helpers
