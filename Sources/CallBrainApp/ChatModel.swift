@@ -25,10 +25,10 @@ final class ChatModel {
     /// Fire-and-forget a question — returns immediately; the answer streams into `messages` in the
     /// background and survives view teardown. Ignored if a generation is already running.
     func send(_ text: String, _ env: AppEnvironment, research: Bool = false) {
-        guard task == nil else { return }
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, task == nil else { return }   // trim FIRST so a whitespace send can't strand `task`
         generation += 1
         let gen = generation
-        let q = text
         task = Task { [weak self] in await self?.ask(q, env, research: research, gen: gen) }
     }
 
@@ -204,7 +204,9 @@ final class ChatModel {
         // the upsert was in flight, DON'T clobber the model's conversationID — roll the orphan row back
         // instead of binding this turn to a conversation the user abandoned (audit HIGH: reentrancy race).
         guard generation == gen, conversationID == nil else {
-            Task.detached { try? store.deleteConversation(id: id) }
+            // Roll back the orphan row — but ONLY if it wasn't adopted as the current conversation in the
+            // meantime (a recents refresh could have surfaced it and load() bound to it); audit MED.
+            if conversationID != id { Task.detached { try? store.deleteConversation(id: id) } }
             return nil
         }
         if ok { conversationID = id; return id }

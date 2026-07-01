@@ -114,16 +114,23 @@ final class ImportCoordinator {
 
     // MARK: - processing
 
+    /// Set when a job is enqueued while a drain is already running, so the drain re-checks the store before
+    /// it clears `processing` — otherwise a job enqueued in the instant between the drain's last empty read
+    /// and `processing = false` would be stranded until the next enqueue/relaunch (audit HIGH: lost wakeup).
+    @ObservationIgnored private var drainRequested = false
+
     private func startDraining() {
-        guard !processing else { return }
+        if processing { drainRequested = true; return }   // already draining → ask it to loop again
         processing = true
         // Defeat App Nap + idle sleep while importing/transcribing so jobs finish even if the user steps
         // away or closes the window (Phase 6). The token is released when the queue drains.
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled], reason: "Importing calls")
-        Task {
-            await drain()
-            processing = false
+        Task { [weak self] in
+            guard let self else { return }
+            // The only suspension is inside drain(); a mid-drain enqueue sets drainRequested → we loop.
+            repeat { self.drainRequested = false; await self.drain() } while self.drainRequested
+            self.processing = false
             ProcessInfo.processInfo.endActivity(activity)
         }
     }
@@ -135,20 +142,26 @@ final class ImportCoordinator {
         while let job = await Task.detached(operation: {
             (try? store.pendingImportJobs())?.first(where: { $0.state == .queued })
         }).value {
-            await run(job)
+            // If we can't even mark the job running (DB write failing), STOP — otherwise the still-`.queued`
+            // row would be re-read and re-imported every iteration in a tight loop (audit MED: re-run).
+            if await run(job) == false { break }
         }
         env.refreshReminders()   // new imports can add tasks → keep the reminder count fresh
     }
 
-    private func run(_ job: ImportJob) async {
-        var j = job; j.state = .running; _ = await persist(j)
+    /// Returns false ONLY when the initial `.running` mark couldn't be persisted — the job is still `.queued`
+    /// in the DB, so the drain must stop rather than re-read + re-import it forever (audit MED).
+    @discardableResult
+    private func run(_ job: ImportJob) async -> Bool {
+        var j = job; j.state = .running
+        guard await persist(j) else { return false }
 
         do {
             // Media file → on-device transcription path (decode → WhisperKit → FluidAudio → ingest).
             if job.payloadKind == .file, let path = job.payload, Self.isMedia(URL(fileURLWithPath: path)) {
                 try await runTranscription(job: &j, path: path)
                 _ = await persist(j)
-                return
+                return true
             }
 
             let (outcome, resolved): (IngestEngine.Outcome, AIImporter.Resolved)
@@ -190,6 +203,7 @@ final class ImportCoordinator {
             j.message = Self.friendly(error)
             _ = await persist(j)
         }
+        return true
     }
 
     /// Transcribe a media file on-device, then ingest the result like any other meeting.

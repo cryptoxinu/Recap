@@ -132,7 +132,7 @@ struct RootView: View {
             MeetingWorkspaceView(meetingID: mid)
         } else {
             switch selection ?? .home {
-            case .home: HomeView()
+            case .home: HomeView(onNavigate: { selection = $0 })
             case .ask: AskView()
             case .meetings: MeetingsView()
             case .tasks: TasksView()

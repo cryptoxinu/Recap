@@ -40,12 +40,16 @@ final class FathomConnect {
     /// bounds how far back we look.
     private static let window: TimeInterval = 3 * 86_400
 
+    /// QA affordance: `CALLBRAIN_SKIP_RECONCILE=1` skips the launch Keychain reconcile + auto-sync so a UI
+    /// test launch doesn't trigger a Keychain-access prompt on a freshly re-signed dev build.
+    static var qaSkipReconcile: Bool { ProcessInfo.processInfo.environment["CALLBRAIN_SKIP_RECONCILE"] == "1" }
+
     init(env: AppEnvironment) {
         self.env = env
         self.client = FathomClient(store: store)
         // Read the cached flag (instant) — NEVER the Keychain on the launch path (a Keychain read can take
         // seconds on an unsigned build and would beachball the whole app on open).
-        self.connected = UserDefaults.standard.bool(forKey: Self.connectedKey)
+        self.connected = Self.qaSkipReconcile ? false : UserDefaults.standard.bool(forKey: Self.connectedKey)
         if connected {
             Task { [weak self] in await self?.syncNow() }   // its Keychain access is off the main thread
             startAutoSync()
@@ -59,6 +63,7 @@ final class FathomConnect {
         // Existing users connected BEFORE this flag existed have an API key in the Keychain but no cached
         // flag yet. Read the real Keychain OFF-MAIN and self-heal the flag (kicking the catch-up sync if it
         // flips us connected). Keeps launch instant while staying honest about the real connection state.
+        guard !Self.qaSkipReconcile else { return }
         let store = self.store
         let gen = connGen
         Task.detached { [weak self] in

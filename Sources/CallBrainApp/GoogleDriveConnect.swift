@@ -144,8 +144,9 @@ final class GoogleDriveConnect {
         // Read the cached flags (instant) instead of the Keychain — an unsigned-binary Keychain read costs
         // ~6s and that was beachballing the launch. The Keychain is the source of truth; these mirrors are
         // reconciled off-main right after launch (audit: launch-latency).
-        self.connected = UserDefaults.standard.bool(forKey: Self.connectedKey)
-        self.hasClient = UserDefaults.standard.bool(forKey: Self.configuredKey)
+        let qaSkip = FathomConnect.qaSkipReconcile   // CALLBRAIN_SKIP_RECONCILE=1 → no launch Keychain read
+        self.connected = qaSkip ? false : UserDefaults.standard.bool(forKey: Self.connectedKey)
+        self.hasClient = qaSkip ? false : UserDefaults.standard.bool(forKey: Self.configuredKey)
         self.folderID = UserDefaults.standard.string(forKey: Self.folderIDKey)
         self.folderName = UserDefaults.standard.string(forKey: Self.folderNameKey)
         self.includeShared = UserDefaults.standard.object(forKey: Self.includeSharedKey) as? Bool ?? true
@@ -157,6 +158,7 @@ final class GoogleDriveConnect {
         // Existing users connected/configured BEFORE these flags existed have Keychain state but no cached
         // flags yet. Read the real Keychain OFF-MAIN (slow on an unsigned binary) and self-heal — and if it
         // flips us connected, kick the catch-up sync the fast path skipped. Keeps launch instant + honest.
+        guard !qaSkip else { return }
         let store = self.store
         let gen = syncGeneration
         Task.detached { [weak self] in

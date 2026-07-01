@@ -20,10 +20,12 @@ final class FolderAutoImport {
 
     init(env: AppEnvironment) {
         self.env = env
-        if let p = UserDefaults.standard.string(forKey: Self.folderKey),
-           FileManager.default.fileExists(atPath: p) {
-            start(path: p)
-        }
+        // QA launches (CALLBRAIN_SKIP_RECONCILE=1) don't start the watcher, so a UI test doesn't trip a
+        // TCC folder-access prompt on a freshly re-signed dev build.
+        guard !FathomConnect.qaSkipReconcile,
+              let p = UserDefaults.standard.string(forKey: Self.folderKey),
+              FileManager.default.fileExists(atPath: p) else { return }
+        start(path: p)
     }
 
     var isWatching: Bool { folderPath != nil }
