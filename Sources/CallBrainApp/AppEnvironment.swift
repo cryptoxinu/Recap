@@ -165,9 +165,13 @@ final class AppEnvironment {
     ///   with AI" button).
     /// - Otherwise summarize the transcript LOCALLY (Ollama Qwen) by default — free + private; falls back to
     ///   the CLI subscription if the local model is unavailable. `preferCloud` runs the premium CLI pass.
+    /// Typed outcome so the UI can tell an ENGINE failure (Ollama down + no CLI → show a "set up your
+    /// engine" banner) apart from a benign no-content case (don't alarm the user). Audit MED.
+    enum SummaryOutcome: Sendable { case ok, noContent, engineUnavailable, persistFailed }
+
     @discardableResult
-    func generateCallSummary(for meetingID: String, preferCloud: Bool = false) async -> Bool {
-        guard let m = try? store.meeting(id: meetingID) else { return false }
+    func generateCallSummary(for meetingID: String, preferCloud: Bool = false) async -> SummaryOutcome {
+        guard let m = try? store.meeting(id: meetingID) else { return .noContent }
         // Every call gets a concise Summary-tab digest — including Gemini calls (we summarize Google's notes
         // into a short digest; the full notes stay on the Transcript tab). Founder ask 2026-06-30: tabs on
         // every call.
@@ -178,7 +182,7 @@ final class AppEnvironment {
             let chunks = (try? store.transcript(meetingID: meetingID)) ?? []
             text = chunks.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
         }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .noContent }
 
         // Local-first chain: the small routine model → cloud as a last resort if Ollama is unavailable.
         // `preferCloud` (the "Regenerate with AI" button) goes straight to the premium CLI pass (Opus).
@@ -188,8 +192,9 @@ final class AppEnvironment {
                CLISummarizer(llm: router, model: "sonnet")]
         var result: CallSummary?
         for s in summarizers { if let r = await s.summarize(transcript: text, title: m.displayTitle) { result = r; break } }
-        guard let r = result else { return false }
-        try? store.setCallSummary(id: meetingID, summary: r.summary, source: r.source)
+        guard let r = result else { return .engineUnavailable }   // Ollama down AND CLI failed → real engine failure
+        do { try store.setCallSummary(id: meetingID, summary: r.summary, source: r.source) }
+        catch { return .persistFailed }
         // Refresh the call's to-dos idempotently (replaces prior OPEN summary tasks, keeps completed ones)
         // so a Regenerate doesn't accumulate reworded duplicates.
         let items = r.actionItems
@@ -197,7 +202,7 @@ final class AppEnvironment {
             .filter { !$0.text.isEmpty }
         try? store.setSummaryTasks(meetingID: meetingID, items: items)
         refreshReminders(); titlesRevision &+= 1
-        return true
+        return .ok
     }
 
     /// Whether an automatic local summary is still warranted (the call exists, isn't Gemini-notes, and has

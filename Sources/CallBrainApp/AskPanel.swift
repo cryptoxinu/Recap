@@ -116,9 +116,11 @@ struct AskPanel: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(messages) { m in
+                        // Only the MOST RECENT turn offers "Try again" — retryLast operates on the tail, so
+                        // showing it on an earlier failed turn would retry the wrong question (audit HIGH).
                         AskMessageView(message: m, onTapCite: { c in
                             if let onCite { onCite(c) } else { sheet = MeetingRef(id: c.meetingID, chunkID: c.chunkID) }
-                        }, onRetry: { model.retryLast(env) })
+                        }, onRetry: m.id == messages.last?.id ? { model.retryLast(env) } : nil)
                             .id(m.id)
                     }
                 }

@@ -64,10 +64,13 @@ struct SettingsView: View {
                 Toggle("Daily action-item reminder", isOn: $taskReminders)
                     .onChange(of: taskReminders) { _, on in
                         Task {
-                            await NotificationManager.setEnabled(on, openTaskCount: env.openTaskCount())
-                            // Reconcile the toggle with the EFFECTIVE state: if permission was denied,
-                            // setEnabled writes the flag back to false — sync the toggle so it doesn't lie
-                            // (stay ON doing nothing) and surface why.
+                            await NotificationManager.setEnabled(on, openTaskCount: env.openTaskCountCached)
+                            // If the user flipped the toggle AGAIN while the permission request was in flight,
+                            // this result is stale — don't reconcile it (audit MED: false "denied" after a
+                            // user-initiated OFF). Only act if the toggle still reflects the state we handled.
+                            guard taskReminders == on else { return }
+                            // Reconcile with the EFFECTIVE state: if permission was denied, setEnabled wrote
+                            // the flag back to false — sync the toggle so it doesn't lie (stay ON doing nothing).
                             if on && !NotificationManager.isEnabled {
                                 taskReminders = false
                                 reminderDenied = true

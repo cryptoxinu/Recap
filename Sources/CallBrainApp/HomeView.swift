@@ -199,19 +199,15 @@ struct HomeView: View {
         }
     }
 
-    // Parse the canonical YYYY-MM-DD once (cached) → a readable "Today"/"Yesterday"/"Jun 30, 2026" label,
-    // so the recent-calls list reads like a product, not database rows. Falls back to the raw string.
-    private static let ymdParser: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
+    // Parse the canonical YYYY-MM-DD → a readable "Today"/"Yesterday"/"Jun 30, 2026" label, so the
+    // recent-calls list reads like a product, not database rows. Parses via integer components (no shared
+    // mutable DateFormatter — Sendable-safe under Swift 6). Falls back to the raw string on any mismatch.
     static func friendlyDate(_ ymd: String) -> String {
-        guard let date = ymdParser.date(from: ymd) else { return ymd }   // not the canonical format — show as-is
+        let parts = ymd.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return ymd }
         let cal = Calendar.current
+        var comps = DateComponents(); comps.year = parts[0]; comps.month = parts[1]; comps.day = parts[2]
+        guard let date = cal.date(from: comps) else { return ymd }
         if cal.isDateInToday(date) { return "Today" }
         if cal.isDateInYesterday(date) { return "Yesterday" }
         return date.formatted(.dateTime.month(.abbreviated).day().year())

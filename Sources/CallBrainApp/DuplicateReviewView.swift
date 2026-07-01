@@ -10,6 +10,7 @@ struct DuplicateReviewView: View {
     @State private var suggestions: [DuplicateSuggestion] = []
     @State private var confirmDelete: (id: String, title: String)?
     @State private var deleteError: String?
+    @State private var reloadSeq = 0                  // drops out-of-order off-main dup scans
 
     private static let dismissedKey = "callbrain.dismissedDuplicates"
 
@@ -109,10 +110,18 @@ struct DuplicateReviewView: View {
     }
 
     private func reload() {
+        // The meetingMetas read + the O(n²) DuplicateDetector scan run OFF the main thread (audit MED — the
+        // delete moved off-main but this reload was still blocking); a sequence guard drops stale results.
         let dismissed = Set(UserDefaults.standard.stringArray(forKey: Self.dismissedKey) ?? [])
-        let metas = (try? env.store.meetingMetas()) ?? []
-        let next = DuplicateDetector.suggestions(metas).filter { !dismissed.contains($0.id) }
-        withAnimation(Theme.springy) { suggestions = next }
+        let store = env.store
+        reloadSeq += 1; let seq = reloadSeq
+        Task { @MainActor in
+            let next = await Task.detached {
+                DuplicateDetector.suggestions((try? store.meetingMetas()) ?? []).filter { !dismissed.contains($0.id) }
+            }.value
+            guard reloadSeq == seq else { return }
+            withAnimation(Theme.springy) { suggestions = next }
+        }
     }
 
     private func dismissPair(_ s: DuplicateSuggestion) {

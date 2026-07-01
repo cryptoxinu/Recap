@@ -74,8 +74,9 @@ struct GeminiNotesView: View {
         for line in introLines {
             if isDateLine(line) { info.consumed.insert(line); continue }
             if line.hasSuffix(".") && line.contains(" ") && line.count > 40 {
-                info.summary = line
-                info.consumed.insert(line)
+                // Keep ONLY the first summary sentence; a second long sentence must stay a normal section
+                // point rather than being consumed-but-not-rendered (audit LOW: silent content loss).
+                if info.summary == nil { info.summary = line; info.consumed.insert(line) }
             } else if let names = rosterNames(line) {
                 info.participants = names
                 info.consumed.insert(line)

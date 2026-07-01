@@ -127,6 +127,7 @@ final class GoogleDriveConnect {
     /// Bumped on disconnect so an in-flight `syncNow` aborts promptly after its next await (instead of
     /// finishing the whole listing/download pass against a now-disconnected account).
     @ObservationIgnored private var syncGeneration = 0
+    @ObservationIgnored private var foldersLoadSeq = 0     // drops out-of-order folder-listing results
 
     /// Cached "an OAuth client (id+secret) is stored" flag — so `isConfigured` never does a (slow,
     /// main-thread) Keychain read during a SwiftUI render. Reconciled off-main in init.
@@ -213,12 +214,15 @@ final class GoogleDriveConnect {
     /// a genuinely empty account, so the UI can show a retry/error instead of a silent "no folders".
     func loadFolders() async {
         guard connected else { return }
+        foldersLoadSeq &+= 1; let seq = foldersLoadSeq
         foldersLoading = true; foldersError = false
-        defer { foldersLoading = false }
         do {
-            availableFolders = try await client.listFolders()
+            let folders = try await client.listFolders()
+            guard seq == foldersLoadSeq else { return }   // a newer load superseded this one
+            availableFolders = folders; foldersLoading = false
         } catch {
-            foldersError = true
+            guard seq == foldersLoadSeq else { return }   // don't let a stale failure clobber a newer success
+            foldersError = true; foldersLoading = false
             status = "Couldn't load your Drive folders — check your connection and try again."
         }
     }

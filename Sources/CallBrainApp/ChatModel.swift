@@ -111,7 +111,8 @@ final class ChatModel {
         }
     }
 
-    func ask(_ text: String, _ env: AppEnvironment, research requested: Bool = false, gen explicitGen: Int? = nil) async {
+    func ask(_ text: String, _ env: AppEnvironment, research requested: Bool = false, gen explicitGen: Int? = nil,
+             skipUserPersist: Bool = false) async {
         let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
         let gen: Int
@@ -140,7 +141,9 @@ final class ChatModel {
         // persist; the chat still works in-memory but we DON'T pretend it's saved (Codex P4.5 gate HIGH).
         let convID = await ensureConversation(firstQuestion: q, env, gen: gen)
         if Task.isCancelled || generation != gen { return }   // abandoned during the conversation upsert
-        if let convID { await persist(.user, text: q, citations: [], conversationID: convID, env) }
+        // On a retry the user turn is ALREADY persisted from the first (failed) attempt — don't write it
+        // again, or reopening the thread shows a duplicate "You" row (audit HIGH).
+        if !skipUserPersist, let convID { await persist(.user, text: q, citations: [], conversationID: convID, env) }
 
         // Live reasoning timeline: append each real pipeline step to the pending message.
         let onStep: AskEngine.StepHandler = { @MainActor [weak self] step in
@@ -211,18 +214,21 @@ final class ChatModel {
         return "Couldn't reach the AI engine — check Engine status on the Home screen."
     }
 
-    /// Retry after a failed turn (convention #4): drop the failed assistant bubble and re-send the last
-    /// user question. A no-op if there's nothing to retry or a generation is already running.
+    /// Retry the MOST RECENT failed turn (the only one that renders a "Try again" button). Operates strictly
+    /// on the trailing failed-assistant + its preceding user bubble (audit HIGH: don't retry the wrong turn),
+    /// and re-runs generation WITHOUT re-persisting the user message (it's already saved — audit HIGH: no
+    /// duplicate "You" row). No-op if a generation is already running or the tail isn't a failed turn.
     func retryLast(_ env: AppEnvironment) {
         guard task == nil else { return }
-        // Find the last user turn; drop everything after it (the failed assistant bubble) and re-send.
-        guard let userIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
-        let question = messages[userIdx].text
+        guard let aIdx = messages.lastIndex(where: { $0.role == .assistant }),
+              messages[aIdx].status == "failed",
+              aIdx > 0, messages[aIdx - 1].role == .user else { return }
+        let question = messages[aIdx - 1].text
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // Remove the failed assistant bubble(s) AND the user turn itself — send() re-appends the user bubble,
-        // so this avoids a duplicate "You" row while keeping the earlier conversation history intact.
-        messages.removeSubrange(userIdx...)
-        send(question, env)
+        messages.removeSubrange((aIdx - 1)...)            // drop the user turn + its failed answer; ask() re-appends
+        generation += 1
+        let gen = generation
+        task = Task { [weak self] in await self?.ask(question, env, gen: gen, skipUserPersist: true) }
     }
 
     // MARK: - persistence

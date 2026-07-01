@@ -105,16 +105,17 @@ final class SummaryScheduler {
             if !priority.isEmpty {
                 let job = priority.removeFirst()
                 workingOn = job.id
-                let ok = await env.generateCallSummary(for: job.id, preferCloud: job.cloud)
-                if ok { lastFailed.remove(job.id) } else { lastFailed.insert(job.id) }
+                let outcome = await env.generateCallSummary(for: job.id, preferCloud: job.cloud)
+                // Only flag an ENGINE/persist failure — a no-content call isn't a failure to surface.
+                if outcome == .ok || outcome == .noContent { lastFailed.remove(job.id) } else { lastFailed.insert(job.id) }
                 workingOn = nil
             } else if batteryOK, let id = auto.first {
                 auto.removeFirst()
                 queuedAuto.remove(id)
                 workingOn = id
                 if env.needsAutoSummary(id) {                 // skip if a priority pass already produced it
-                    let ok = await env.generateCallSummary(for: id)
-                    if ok { lastFailed.remove(id) } else { lastFailed.insert(id) }
+                    let outcome = await env.generateCallSummary(for: id)
+                    if outcome == .ok || outcome == .noContent { lastFailed.remove(id) } else { lastFailed.insert(id) }
                 }
                 workingOn = nil
             } else {
