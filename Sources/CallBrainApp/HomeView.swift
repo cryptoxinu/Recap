@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AppEnvironment.self) private var env
     var onNavigate: ((SidebarItem) -> Void)? = nil   // lets a card jump to another sidebar tab
     @State private var meetings: [Store.MeetingRow] = []
+    @State private var didLoad = false                // true after the first meetings read completes
     @State private var chat = ChatModel()
     @State private var openMeetingID: String?
     @State private var loadSeq = 0                    // drops out-of-order off-main meeting reloads
@@ -20,6 +21,33 @@ struct HomeView: View {
         }
     }
 
+    /// A time-appropriate emoji that tracks `greeting` (was a hardcoded 🌙 that showed a moon at noon).
+    private var greetingEmoji: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: "☀️"
+        case 12..<17: "🌤"
+        default: "🌙"
+        }
+    }
+
+    /// The premium CLI CallBrain will actually run — for reflecting its health on the Engine card face.
+    private var premiumOK: Bool { env.providerPrimary == .codex ? status.snap.codexOK : status.snap.claudeOK }
+
+    /// The Engine card's face value — honest about a degraded engine once the probe has run.
+    private var engineValue: String {
+        guard status.snap.loaded else { return "Local + cloud" }   // still probing — neutral, not alarming
+        if !status.snap.ollamaOK && !premiumOK { return "Offline" }
+        if !status.snap.ollamaOK { return "Ollama off" }
+        if !premiumOK { return "Local only" }
+        return "Local + cloud"
+    }
+    private var engineTint: Color {
+        guard status.snap.loaded else { return .orange }
+        if !status.snap.ollamaOK && !premiumOK { return .red }
+        if !status.snap.ollamaOK || !premiumOK { return .yellow }
+        return .orange
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             mainColumn
@@ -32,6 +60,9 @@ struct HomeView: View {
             // Titles + categories are cheap; full summaries are generated LAZILY when a call is opened
             // (no eager 14B storm on launch — that was the fan/lag cause).
             env.backfillTitleIntelligence(); env.backfillCategories()
+            // Probe engine health so the "Engine" card face reflects reality (Ollama off / no CLI) instead
+            // of always claiming "Local + cloud" (off the render/launch hot path — the probe is async).
+            await status.refresh()
         }
         .onChange(of: env.titlesRevision) {   // live-refresh as AI titles/categories land — animated, not popped
             Task { await loadMeetings() }
@@ -52,13 +83,13 @@ struct HomeView: View {
         loadSeq += 1; let seq = loadSeq
         let m = await Task.detached { (try? store.recentMeetings()) ?? [] }.value
         guard loadSeq == seq else { return }   // a newer reload (title/category landed) superseded this one
-        withAnimation(Theme.springy) { meetings = m }
+        withAnimation(Theme.springy) { meetings = m; didLoad = true }
     }
 
     private var mainColumn: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("\(greeting) 🌙").font(.largeTitle).bold()
+                Text("\(greeting) \(greetingEmoji)").font(.largeTitle).bold()
 
                 if let err = env.initError {
                     Label(err, systemImage: "exclamationmark.triangle.fill")
@@ -82,20 +113,32 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                     .popover(isPresented: $showProviderPicker, arrowEdge: .bottom) { providerPicker }
 
-                    // Engine → live model + Ollama + provider health.
+                    // Engine → live model + Ollama + provider health. The card FACE reflects probed health
+                    // (not a hardcoded healthy "Local + cloud") so a degraded engine is visible at a glance.
                     Button { showEngineStatus = true } label: {
-                        statCard("Engine", "Local + cloud", "bolt.horizontal", .orange)
+                        statCard("Engine", engineValue, "bolt.horizontal", engineTint)
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showEngineStatus, arrowEdge: .bottom) { engineStatus }
                 }
 
                 Text("Recent calls").font(.headline)
-                if meetings.isEmpty {
+                if meetings.isEmpty && didLoad {
+                    // Genuinely empty (the first load finished with nothing) — show the onboarding card.
                     VStack(alignment: .leading, spacing: 6) {
                         Text("No calls yet.").bold()
                         Text("Go to **Import**, paste a transcript, and it'll show up here — then ask it anything.")
                             .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cbCard()
+                    .transition(.opacity)
+                } else if meetings.isEmpty {
+                    // Still loading — a neutral placeholder so the onboarding "No calls yet" card doesn't
+                    // FLASH for a returning user before the SQLite read completes (looks like data vanished).
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading your calls…").foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .cbCard()
@@ -138,7 +181,7 @@ struct HomeView: View {
                 if let s = m.aiSummary, !s.isEmpty {
                     Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Text("\(m.date) · \(sourceLabel(m.source))").font(.caption2).foregroundStyle(.tertiary)
+                Text("\(Self.friendlyDate(m.date)) · \(sourceLabel(m.source))").font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
@@ -154,6 +197,24 @@ struct HomeView: View {
         case "fireflies": "Fireflies"; case "fathom": "Fathom"; case "cluely": "Cluely"
         case "paste": "Pasted"; default: s
         }
+    }
+
+    // Parse the canonical YYYY-MM-DD once (cached) → a readable "Today"/"Yesterday"/"Jun 30, 2026" label,
+    // so the recent-calls list reads like a product, not database rows. Falls back to the raw string.
+    private static let ymdParser: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    static func friendlyDate(_ ymd: String) -> String {
+        guard let date = ymdParser.date(from: ymd) else { return ymd }   // not the canonical format — show as-is
+        let cal = Calendar.current
+        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
     // MARK: - Home-card popovers (provider picker + engine status)
@@ -198,16 +259,16 @@ struct HomeView: View {
     private var engineStatus: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Engine status").font(.headline)
-            statusLine("Ollama (local models)", status.snap.loaded ? status.snap.ollamaOK : nil,
-                       status.snap.ollamaOK ? "running" : "not running — start Ollama to summarize on-device")
-            statusLine("Summaries · \(env.localSummaryModel)", status.snap.loaded ? status.hasModel(env.localSummaryModel) : nil,
-                       status.hasModel(env.localSummaryModel) ? "ready" : "run: ollama pull \(env.localSummaryModel)")
-            statusLine("Embeddings · nomic-embed-text", status.snap.loaded ? status.hasModel("nomic-embed-text") : nil,
-                       status.hasModel("nomic-embed-text") ? "ready" : "run: ollama pull nomic-embed-text")
+            let probing = !status.snap.loaded   // while the async probe runs, DON'T show definitive failures
+            statusLine("Ollama (local models)", probing ? nil : status.snap.ollamaOK,
+                       probing ? "Checking…" : (status.snap.ollamaOK ? "running" : "not running — start Ollama to summarize on-device"))
+            statusLine("Summaries · \(env.localSummaryModel)", probing ? nil : status.hasModel(env.localSummaryModel),
+                       probing ? "Checking…" : (status.hasModel(env.localSummaryModel) ? "ready" : "run: ollama pull \(env.localSummaryModel)"))
+            statusLine("Embeddings · nomic-embed-text", probing ? nil : status.hasModel("nomic-embed-text"),
+                       probing ? "Checking…" : (status.hasModel("nomic-embed-text") ? "ready" : "run: ollama pull nomic-embed-text"))
             Divider()
-            let premiumOK = env.providerPrimary == .codex ? status.snap.codexOK : status.snap.claudeOK
             statusLine("Premium · \(env.providerPrimary == .codex ? "Codex" : "Claude") CLI",
-                       status.snap.loaded ? premiumOK : nil, premiumOK ? "available" : "CLI not found")
+                       probing ? nil : premiumOK, probing ? "Checking…" : (premiumOK ? "available" : "CLI not found"))
             HStack {
                 Spacer()
                 Button { Task { await status.refresh() } } label: {

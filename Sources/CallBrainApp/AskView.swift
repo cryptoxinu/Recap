@@ -34,7 +34,13 @@ struct AskView: View {
         }
         .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $renameText)
-            Button("Save") { if let c = renaming { chat.rename(c.id, to: renameText, env) }; renaming = nil }
+            Button("Save") {
+                // Trim + guard: a blank/whitespace-only title would write an unidentifiable Recents row.
+                let title = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let c = renaming, !title.isEmpty { chat.rename(c.id, to: title, env) }
+                renaming = nil
+            }
+            .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) { renaming = nil }
         }
     }

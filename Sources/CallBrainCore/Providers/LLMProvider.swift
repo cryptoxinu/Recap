@@ -41,6 +41,31 @@ public enum LLMError: Error, Sendable, Equatable {
     case allProvidersFailed(String)
 }
 
+extension LLMError: LocalizedError {
+    /// Human-readable cause so a user who simply hasn't started Ollama / installed the CLI sees a real
+    /// message instead of the useless bridged Foundation string ("The operation couldn't be completed…").
+    public var errorDescription: String? {
+        switch self {
+        case .notInstalled:
+            return "The AI CLI wasn't found — install Claude or Codex, or switch engines in Settings."
+        case .launchFailed:
+            return "Couldn't reach the AI engine. Is Ollama running, or your Claude/Codex CLI available?"
+        case .timedOut(let seconds):
+            return "The AI engine took too long to respond (over \(seconds)s). Try again."
+        case .nonZeroExit:
+            return "The AI engine exited with an error. Check that Claude/Codex/Ollama is available."
+        case .providerError(_, let detail):
+            return detail.isEmpty ? "The AI engine reported an error." : detail
+        case .rateLimited:
+            return "Rate limited — try again shortly."
+        case .decodeFailed:
+            return "Couldn't read the AI engine's response. Try again."
+        case .allProvidersFailed:
+            return "No AI engine responded — check that Claude, Codex, or Ollama is available."
+        }
+    }
+}
+
 /// A text-generation provider over the user's CLI subscription (claude / codex / a router over both).
 /// The abstraction lets `AskEngine`/`AIImporter` flip providers and fall back transparently (Phase 5).
 public protocol LLMProvider: Sendable {

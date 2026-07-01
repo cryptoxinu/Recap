@@ -21,8 +21,8 @@ phase** · drive everything (founder is a non-coder) · production-grade.
 | 0 | Launch beachball — all Keychain I/O off-main | ✅ DONE | cold launch 0.28–0.57s (was 16s); 184 tests; 2× Codex |
 | 1 | Pinwheel root-cause sweep (main-thread audit) | ✅ DONE | every Store call off-main; cliclick tab-flip verified; 4-lens audit → 10 findings ALL remediated |
 | 2 | Transcript speaker / name recognition rebuild | ✅ DONE | EntityExtractor.clean + SpeakerResolver, off-main wiring; 192 tests (+8) |
-| 3 | Home cards → live provider picker + engine status | ☐ | — |
-| 4 | Final UI/UX polish + edge-case hardening | ☐ | — |
+| 3 | Home cards → live provider picker + engine status | ✅ DONE | both popovers verified live (all health dots green); Codex re-audit 5 findings fixed |
+| 4 | Final UI/UX polish + edge-case hardening | ▶ in progress | — |
 | 5 | Big Codex audit sweep + remediate | ☐ | — |
 | 6 | Install to /Applications + Desktop + icon | ☐ | — |
 | 7 | Private GitHub repo (cryptoxinu) + README + push/merge | ☐ | — |

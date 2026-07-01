@@ -65,6 +65,8 @@ struct MarkdownAnswerView: View {
     enum Block: Equatable {
         case heading(level: Int, String)
         case bullet(String)
+        case ordered(number: String, String)   // "1." "2." — preserves rank/step ordering
+        case quote(String)                      // "> …" → styled blockquote (not a literal '>')
         case paragraph(String)
         case rule
     }
@@ -81,6 +83,18 @@ struct MarkdownAnswerView: View {
                 Text("•").foregroundStyle(Theme.accent).bold()
                 inline(s).frame(maxWidth: .infinity, alignment: .leading)
             }
+        case .ordered(let number, let s):
+            HStack(alignment: .top, spacing: 8) {
+                Text(number).monospacedDigit().foregroundStyle(Theme.accent).bold()
+                inline(s).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .quote(let s):
+            HStack(alignment: .top, spacing: 8) {
+                RoundedRectangle(cornerRadius: 2).fill(Theme.accent).frame(width: 3)
+                    .fixedSize(horizontal: true, vertical: false)
+                inline(s).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .fixedSize(horizontal: false, vertical: true)
         case .paragraph(let s):
             inline(s).frame(maxWidth: .infinity, alignment: .leading)
         case .rule:
@@ -163,8 +177,11 @@ struct MarkdownAnswerView: View {
             else if line.hasPrefix("## ") { out.append(.heading(level: 2, String(line.dropFirst(3)))) }
             else if line.hasPrefix("# ") { out.append(.heading(level: 1, String(line.dropFirst(2)))) }
             else if line.hasPrefix("- ") || line.hasPrefix("* ") { out.append(.bullet(String(line.dropFirst(2)))) }
-            else if let m = line.range(of: #"^\d+\.\s"#, options: .regularExpression) {
-                out.append(.bullet(String(line[m.upperBound...])))
+            else if line.hasPrefix("> ") { out.append(.quote(String(line.dropFirst(2)))) }
+            else if let m = line.range(of: #"^(\d+)\.\s"#, options: .regularExpression) {
+                // Capture the leading "N." so a numbered list keeps its real numbers (not re-bulleted).
+                let number = String(line[..<m.upperBound]).trimmingCharacters(in: .whitespaces)
+                out.append(.ordered(number: number, String(line[m.upperBound...])))
             } else { out.append(.paragraph(line)) }
         }
         return out

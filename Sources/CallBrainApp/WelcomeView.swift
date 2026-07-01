@@ -4,6 +4,7 @@ import SwiftUI
 /// how to get a call in. Shown once (UserDefaults `hasSeenWelcome`).
 struct WelcomeView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     static let seenKey = "callbrain.hasSeenWelcome"
     @State private var appeared = false
     @State private var ctaHover = false
@@ -28,24 +29,33 @@ struct WelcomeView: View {
             .padding(.vertical, 4)
 
             Button {
-                UserDefaults.standard.set(true, forKey: Self.seenKey)
+                markSeen()
                 dismiss()
             } label: {
                 Text("Get started").font(.headline).frame(maxWidth: 220).padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent).tint(Theme.accent)
-            .scaleEffect(ctaHover ? 1.03 : 1)
-            .shadow(color: Theme.accent.opacity(ctaHover ? 0.35 : 0), radius: 10, y: 4)
-            .animation(Theme.springy, value: ctaHover)
+            .scaleEffect(reduceMotion ? 1 : (ctaHover ? 1.03 : 1))
+            .shadow(color: Theme.accent.opacity(!reduceMotion && ctaHover ? 0.35 : 0), radius: 10, y: 4)
+            .animation(reduceMotion ? nil : Theme.springy, value: ctaHover)
             .onHover { ctaHover = $0 }
             .padding(.top, 4)
         }
         .padding(40)
         .frame(minWidth: 620, minHeight: 600)
         .opacity(appeared ? 1 : 0)
-        .offset(y: appeared ? 0 : 14)
-        .onAppear { withAnimation(.spring(response: 0.55, dampingFraction: 0.85)) { appeared = true } }
+        .offset(y: reduceMotion ? 0 : (appeared ? 0 : 14))
+        // Respect Reduce Motion: no slide/fade entrance when the user has asked the system to reduce motion.
+        .onAppear {
+            if reduceMotion { appeared = true }
+            else { withAnimation(.spring(response: 0.55, dampingFraction: 0.85)) { appeared = true } }
+        }
+        // Persist "seen" on ANY dismissal (Escape / click-outside), not only the CTA — otherwise the welcome
+        // sheet reappears on the next launch when dismissed without tapping "Get started".
+        .onDisappear { markSeen() }
     }
+
+    private func markSeen() { UserDefaults.standard.set(true, forKey: Self.seenKey) }
 
     private func row(_ icon: String, _ title: String, _ body: String) -> some View {
         HStack(alignment: .top, spacing: 14) {

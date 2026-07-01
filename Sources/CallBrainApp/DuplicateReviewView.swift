@@ -9,6 +9,7 @@ struct DuplicateReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var suggestions: [DuplicateSuggestion] = []
     @State private var confirmDelete: (id: String, title: String)?
+    @State private var deleteError: String?
 
     private static let dismissedKey = "callbrain.dismissedDuplicates"
 
@@ -40,13 +41,24 @@ struct DuplicateReviewView: View {
         .task { reload() }
         .alert("Delete this call?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button("Delete", role: .destructive) {
-                if let d = confirmDelete { try? env.store.deleteMeeting(id: d.id); reload(); env.refreshReminders() }
+                guard let d = confirmDelete else { return }
                 confirmDelete = nil
+                // Route through the async wrapper so the heavy cascade delete + citation scrub runs OFF the
+                // main thread (never freezes the window on a large library) and surfaces failure honestly.
+                Task { @MainActor in
+                    if await env.deleteMeetingAsync(d.id) { reload() }
+                    else { deleteError = d.title }
+                }
             }
             Button("Cancel", role: .cancel) { confirmDelete = nil }
         } message: {
             Text("“\(confirmDelete?.title ?? "")” will be removed — its transcript/notes, tasks, this call's "
                  + "chats, and any saved excerpts in other chats. This can't be undone.")
+        }
+        .alert("Couldn't delete", isPresented: Binding(get: { deleteError != nil }, set: { if !$0 { deleteError = nil } })) {
+            Button("OK", role: .cancel) { deleteError = nil }
+        } message: {
+            Text("“\(deleteError ?? "")” couldn't be deleted. Try again.")
         }
     }
 

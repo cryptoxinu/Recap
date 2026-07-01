@@ -7,7 +7,9 @@ struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var primary: ProviderID = .claude
     @State private var taskReminders = false
+    @State private var reminderDenied = false        // macOS notification permission was refused
     @State private var backupStatus: String?
+    @State private var backingUp = false
     @State private var restoreStaged = false
     // Google Drive setup
     @State private var driveSetupShown = false
@@ -61,8 +63,24 @@ struct SettingsView: View {
             Section("Reminders") {
                 Toggle("Daily action-item reminder", isOn: $taskReminders)
                     .onChange(of: taskReminders) { _, on in
-                        Task { await NotificationManager.setEnabled(on, openTaskCount: env.openTaskCount()) }
+                        Task {
+                            await NotificationManager.setEnabled(on, openTaskCount: env.openTaskCount())
+                            // Reconcile the toggle with the EFFECTIVE state: if permission was denied,
+                            // setEnabled writes the flag back to false — sync the toggle so it doesn't lie
+                            // (stay ON doing nothing) and surface why.
+                            if on && !NotificationManager.isEnabled {
+                                taskReminders = false
+                                reminderDenied = true
+                            } else if on {
+                                reminderDenied = false
+                            }
+                        }
                     }
+                if reminderDenied {
+                    Label("Notifications are turned off for CallBrain. Enable them in System Settings ›"
+                          + " Notifications, then try again.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("A once-a-day nudge summarizing how many open action items you have across your calls "
                      + (NotificationManager.available ? "— fires even when CallBrain is closed."
                         : "(notifications activate in the installed app)."))
@@ -76,9 +94,10 @@ struct SettingsView: View {
                 LabeledContent("Data folder", value: env.dataRoot.path)
                 LabeledContent("Calls indexed", value: "\(env.meetingCount())")
                 HStack {
-                    Button("Back up…") { backUp() }
-                    Button("Restore from backup…") { restore() }
+                    Button("Back up…") { backUp() }.disabled(backingUp)
+                    Button("Restore from backup…") { restore() }.disabled(backingUp)
                     Spacer()
+                    if backingUp { ProgressView().controlSize(.small) }
                     if let s = backupStatus { Text(s).font(.caption).foregroundStyle(.secondary) }
                 }
                 if restoreStaged {
@@ -144,13 +163,18 @@ struct SettingsView: View {
             if drive.connected {
                 LabeledContent("Folder") {
                     Menu(drive.folderName ?? "Choose a folder…") {
-                        if drive.availableFolders.isEmpty {
+                        if drive.foldersLoading {
+                            Button("Loading folders…") {}.disabled(true)
+                        } else if drive.foldersError {
+                            Button("Couldn't load — retry") { Task { await drive.loadFolders() } }
+                        } else if drive.availableFolders.isEmpty {
                             Button("Load my folders…") { Task { await drive.loadFolders() } }
                         }
                         ForEach(drive.availableFolders) { f in
                             Button(f.name) { drive.selectFolder(f) }
                         }
                     }
+                    .disabled(drive.foldersLoading)
                 }
                 Toggle("Also import files shared with me", isOn: Binding(
                     get: { drive.includeShared }, set: { drive.includeShared = $0 }))
@@ -229,8 +253,21 @@ struct SettingsView: View {
         panel.allowedContentTypes = [cbkType]
         panel.nameFieldStringValue = "CallBrain-\(TimeCode.ymd(Date())).cbk"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try env.backup(to: url); backupStatus = "Backed up." }
-        catch { backupStatus = "Backup failed: \(error.localizedDescription)" }
+        // Run the full-copy OFF the main thread (a large .cbk beachballs the window otherwise) — show a
+        // spinner + "Backing up…" while it runs, then report the result back on the main actor.
+        let store = env.store
+        backingUp = true
+        backupStatus = "Backing up…"
+        Task {
+            let result: Result<Void, Error> = await Task.detached {
+                do { try store.backup(to: url); return .success(()) } catch { return .failure(error) }
+            }.value
+            backingUp = false
+            switch result {
+            case .success: backupStatus = "Backed up."
+            case .failure(let error): backupStatus = "Backup failed: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func restore() {

@@ -173,7 +173,9 @@ struct MeetingDetailView: View {
                 Text(s).font(.title3).foregroundStyle(.secondary)
             }
             if let m = meeting {
-                HStack(spacing: 14) {
+                // FlowLayout (not a fixed HStack) so the up-to-5 meta labels wrap to a second line on a
+                // narrowed detail window instead of clipping/truncating off-screen.
+                FlowLayout(spacing: 14) {
                     Label(m.date, systemImage: "calendar")
                     Label(sourceLabel(m.source), systemImage: "doc.text")
                     if renamed { Label(m.title, systemImage: "tag").lineLimit(1) }   // original title
@@ -288,6 +290,15 @@ struct MeetingDetailView: View {
                         Text("Summarizing locally…").foregroundStyle(.secondary)
                     }
                     .transition(.opacity)
+                } else if env.summaries.summaryFailed(meetingID) {
+                    // The last attempt failed (local model down AND no CLI subscription) — say so honestly
+                    // instead of reverting to the neutral "No summary yet" as if the user never tried.
+                    Label("Couldn't generate a summary — the on-device model (Ollama) isn't running and no AI "
+                          + "subscription is available. Start Ollama or set up Claude/Codex in Settings, then try again.",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
                 } else {
                     Text(autoPaused
                          ? "Summary paused to save battery — generate it now below."
@@ -299,6 +310,7 @@ struct MeetingDetailView: View {
             }
             .animation(Theme.smooth, value: meeting?.callSummary)
             .animation(Theme.smooth, value: isSummarizing)
+            .animation(Theme.smooth, value: env.summaries.summaryFailed(meetingID))
             regenerateBar
         }
     }
@@ -414,12 +426,15 @@ struct MeetingDetailView: View {
     private func avatar(_ name: String) -> some View {
         let initials = name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined()
         return Text(initials.isEmpty ? "•" : initials.uppercased())
-            .font(.caption.bold()).foregroundStyle(.white)
+            .font(.caption.bold()).foregroundStyle(Color.white)
             .frame(width: 30, height: 30).background(color(for: name), in: Circle())
     }
 
+    /// Deterministic per-speaker color. Restricted to SATURATED/DARK hues so white avatar initials always
+    /// meet contrast (the old palette included light .mint/.teal/.orange where white-on-fill washed out) —
+    /// and it reads the same in Light and Dark mode.
     private func color(for name: String) -> Color {
-        let palette: [Color] = [Theme.accent, .blue, .teal, .green, .orange, .pink, .indigo, .red, .mint]
+        let palette: [Color] = [Theme.accent, .blue, .green, .pink, .indigo, .red, .purple, .brown]
         var h = 5381
         for b in name.utf8 { h = (h &* 33) &+ Int(b) }
         return palette[(h & 0x7fffffff) % palette.count]

@@ -63,18 +63,22 @@ struct GeminiNotesView: View {
         }
     }
 
-    private struct IntroInfo { var summary: String?; var participants: [String] }
+    private struct IntroInfo { var summary: String?; var participants: [String]; var consumed: Set<String> }
 
     /// Classify the pre-section lines: a date (drop — it's in the header meta), the participant roster
-    /// (≥3 capitalized name-pairs, no sentence period), and the summary (a sentence ending in '.').
+    /// (≥3 capitalized name-pairs, no sentence period), and the summary (a sentence ending in '.'). Every
+    /// line the intro actually CONSUMES is recorded so `sections` can drop exactly those (and only those) —
+    /// any pre-section line that matches none of the three buckets stays a normal point instead of vanishing.
     private var introInfo: IntroInfo {
-        var info = IntroInfo(summary: nil, participants: [])
+        var info = IntroInfo(summary: nil, participants: [], consumed: [])
         for line in introLines {
-            if isDateLine(line) { continue }
+            if isDateLine(line) { info.consumed.insert(line); continue }
             if line.hasSuffix(".") && line.contains(" ") && line.count > 40 {
                 info.summary = line
+                info.consumed.insert(line)
             } else if let names = rosterNames(line) {
                 info.participants = names
+                info.consumed.insert(line)
             }
         }
         return info
@@ -145,7 +149,9 @@ struct GeminiNotesView: View {
         var out: [Section] = []
         var current = Section(id: 0, title: nil, points: [])
         var sawHeading = false
-        let intro = Set(introLines)
+        // Drop ONLY the pre-section lines the intro block actually rendered (date/summary/roster) — a
+        // pre-section line that matched none of those buckets is NOT swallowed; it falls through as a point.
+        let consumed = introInfo.consumed
         for line in lines where !line.isEmpty {
             if line.hasPrefix("## ") {
                 let t = String(line.dropFirst(3))
@@ -155,8 +161,8 @@ struct GeminiNotesView: View {
                 sawHeading = true
             } else if line.hasPrefix("### ") {
                 current.points.append(String(line.dropFirst(4)))
-            } else if !sawHeading && intro.contains(line) {
-                continue                                          // handled by the intro block
+            } else if !sawHeading && consumed.contains(line) {
+                continue                                          // rendered by the intro block
             } else {
                 current.points.append(line)
             }

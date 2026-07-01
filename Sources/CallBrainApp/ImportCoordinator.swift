@@ -25,9 +25,20 @@ final class ImportCoordinator {
     }
 
     /// Refresh the display list — the Store read runs OFF the main thread (audit: no main-thread SQLite).
+    /// Live transcription progress ("Transcribing… 42%") lives only in the in-memory `jobs` array (it's not
+    /// persisted per tick), so a concurrent reload would clobber it with the store row's nil message. Preserve
+    /// the in-memory progress label for still-`.running` jobs whose fresh store row has no message, so the
+    /// spinner text stays stable instead of flashing empty during a multi-file drop.
     func reload() async {
         let store = env.store
-        jobs = await Task.detached { (try? store.importJobs()) ?? [] }.value
+        let previous = Dictionary(uniqueKeysWithValues: jobs.map { ($0.id, $0) })
+        var fresh = await Task.detached { (try? store.importJobs()) ?? [] }.value
+        for i in fresh.indices where fresh[i].state == .running && (fresh[i].message?.isEmpty ?? true) {
+            if let old = previous[fresh[i].id], old.state == .running, let msg = old.message, !msg.isEmpty {
+                fresh[i].message = msg
+            }
+        }
+        jobs = fresh
     }
 
     /// True if any of these files has an extension CallBrain can read.

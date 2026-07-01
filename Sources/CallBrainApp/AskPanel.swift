@@ -118,20 +118,28 @@ struct AskPanel: View {
                     ForEach(messages) { m in
                         AskMessageView(message: m, onTapCite: { c in
                             if let onCite { onCite(c) } else { sheet = MeetingRef(id: c.meetingID, chunkID: c.chunkID) }
-                        })
+                        }, onRetry: { model.retryLast(env) })
                             .id(m.id)
                     }
                 }
                 .padding(compact ? 14 : 20)
             }
-            .onChange(of: messages.count) {
-                if let last = messages.last { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) } }
-            }
+            .onChange(of: messages.count) { scrollToEnd(proxy) }
+            // The streaming answer grows IN PLACE (reasoning steps append, then "Thinking…" → full answer)
+            // without changing the message count — track that growth so a long answer stays in view.
+            .onChange(of: messages.last?.steps.count) { scrollToEnd(proxy) }
+            .onChange(of: messages.last?.text) { scrollToEnd(proxy) }
+            .onChange(of: busy) { scrollToEnd(proxy) }
         }
     }
 
+    private func scrollToEnd(_ proxy: ScrollViewProxy) {
+        if let last = messages.last { withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(last.id, anchor: .bottom) } }
+    }
+
     private func ask(_ text: String) {
-        let q = text.trimmingCharacters(in: .whitespaces)
+        // Trim newlines too so the guard matches ChatModel.send's trim — a newline-only field is a no-op.
+        let q = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !busy else { return }
         query = ""
         model.send(q, env, research: researchMode)   // background-survivable; Stop cancels it
@@ -155,7 +163,7 @@ struct AskPanel: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(busy ? .red : Theme.accent)
-                .disabled(!busy && query.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(!busy && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help(busy ? "Stop generating" : "Ask")
                 .animation(Theme.smooth, value: busy)
             }
@@ -189,7 +197,10 @@ struct AskPanel: View {
 struct AskMessageView: View {
     let message: AskMessage
     var onTapCite: ((Cite) -> Void)?
+    var onRetry: (() -> Void)? = nil
     @State private var sourcesExpanded = false   // call-citation list is collapsed by default
+
+    private var failed: Bool { message.status == "failed" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -197,7 +208,7 @@ struct AskMessageView: View {
                 Image(systemName: message.role == .user ? "person.crop.circle.fill" : "sparkles")
                     .foregroundStyle(message.role == .user ? Color.secondary : Theme.accent)
                 Text(message.role == .user ? "You" : "CallBrain").font(.subheadline).bold()
-                if let s = message.status { Text(s).font(.caption).foregroundStyle(.secondary) }
+                if let s = message.status, s != "failed" { Text(s).font(.caption).foregroundStyle(.secondary) }
                 if let p = message.provider {
                     Text("· \(p == .codex ? "Codex" : "Claude")")
                         .font(.caption2).foregroundStyle(Theme.accent)
@@ -207,6 +218,20 @@ struct AskMessageView: View {
             Group {
                 if message.pending {
                     ReasoningTimeline(steps: message.steps).transition(.opacity)
+                } else if failed {
+                    // Honest failure treatment — an error card + a one-tap retry, NOT a normal answer bubble.
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(message.text, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let onRetry {
+                            Button { onRetry() } label: {
+                                Label("Try again", systemImage: "arrow.clockwise").font(.callout)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    .transition(.opacity)
                 } else if message.role == .assistant {
                     VStack(alignment: .leading, spacing: 8) {
                         if !message.steps.isEmpty { ReasoningDisclosure(steps: message.steps) }
@@ -219,7 +244,7 @@ struct AskMessageView: View {
                 }
             }
             .animation(.smooth(duration: 0.3), value: message.pending)
-            if !message.citations.isEmpty {
+            if !failed, !message.citations.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
                     Button { withAnimation(.snappy) { sourcesExpanded.toggle() } } label: {
                         HStack(spacing: 5) {
@@ -249,9 +274,28 @@ struct AskMessageView: View {
                 .padding(.top, 4)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cbCard()
+        .modifier(BubbleTreatment(isUser: message.role == .user))
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// User turns hug their content in a soft accent-tinted bubble and align trailing; assistant/answer turns
+/// keep the neutral full-width card — so the thread is scannable for who said what (was a wall of identical
+/// cards distinguished only by a tiny header).
+private struct BubbleTreatment: ViewModifier {
+    let isUser: Bool
+    func body(content: Content) -> some View {
+        if isUser {
+            content
+                .padding(.vertical, 10).padding(.horizontal, 14)
+                .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.accentSoft))
+                .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius).strokeBorder(Theme.accent.opacity(0.15)))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        } else {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .cbCard()
+        }
     }
 }
 

@@ -149,7 +149,9 @@ struct ImportView: View {
                         Label("Import pasted text", systemImage: "sparkles")
                     }
                     .buttonStyle(.borderedProminent).tint(Theme.accent)
-                    .disabled(raw.trimmingCharacters(in: .whitespaces).isEmpty)
+                    // Trim newlines too so the button disables for newline-only content — matching
+                    // enqueuePaste's .whitespacesAndNewlines trim (a newline-only box was a dead control).
+                    .disabled(raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Spacer()
                 }
                 }

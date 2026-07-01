@@ -114,6 +114,8 @@ final class GoogleDriveConnect {
     private(set) var syncing = false
     private(set) var lastSyncCount = 0
     private(set) var availableFolders: [DriveAPI.DriveFile] = []
+    private(set) var foldersLoading = false            // folder listing in flight (menu shows "Loading…")
+    private(set) var foldersError = false              // last listing failed (offline / expired token)
     var folderID: String? { didSet { UserDefaults.standard.set(folderID, forKey: Self.folderIDKey) } }
     var folderName: String? { didSet { UserDefaults.standard.set(folderName, forKey: Self.folderNameKey) } }
     /// Also import files shared WITH you (Gemini notes / recordings a meeting host shared — they never land
@@ -207,10 +209,18 @@ final class GoogleDriveConnect {
         }
     }
 
-    /// Load the user's folders for the picker.
+    /// Load the user's folders for the picker. Distinguishes a FAILED listing (offline / expired token) from
+    /// a genuinely empty account, so the UI can show a retry/error instead of a silent "no folders".
     func loadFolders() async {
         guard connected else { return }
-        availableFolders = (try? await client.listFolders()) ?? []
+        foldersLoading = true; foldersError = false
+        defer { foldersLoading = false }
+        do {
+            availableFolders = try await client.listFolders()
+        } catch {
+            foldersError = true
+            status = "Couldn't load your Drive folders — check your connection and try again."
+        }
     }
 
     /// Select a Drive folder to sync, then pull it.

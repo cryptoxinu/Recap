@@ -86,8 +86,12 @@ struct TasksView: View {
             Image(systemName: "checklist").font(.system(size: 38)).foregroundStyle(Theme.accent.opacity(0.7))
             Text(filter == .done ? "No completed tasks yet." : "No action items yet")
                 .font(.headline)
-            Text("Import a meeting with notes (e.g. a Google-Meet “Notes by Gemini” doc) and CallBrain "
-                 + "pulls out who owes what — automatically.")
+            // Branch the body on filter too — a user with open tasks who checks the Done tab shouldn't be
+            // told to go import their first meeting (that onboarding pitch only fits an actually-empty list).
+            Text(filter == .done
+                 ? "Tasks you mark complete will collect here."
+                 : "Import a meeting with notes (e.g. a Google-Meet “Notes by Gemini” doc) and CallBrain "
+                   + "pulls out who owes what — automatically.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .frame(maxWidth: 420)
         }
@@ -99,7 +103,10 @@ struct TasksView: View {
         var order: [String] = []
         var map: [String: [Store.TaskRow]] = [:]
         for r in rows {
-            let key = r.item.owner?.isEmpty == false ? r.item.owner! : "Unassigned"
+            // Trim before the emptiness check so a whitespace-only owner (" " from a sloppy LLM extraction)
+            // folds into "Unassigned" instead of producing a blank accent-colored section header.
+            let raw = r.item.owner?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let key = raw.isEmpty ? "Unassigned" : raw
             if map[key] == nil { order.append(key) }
             map[key, default: []].append(r)
         }

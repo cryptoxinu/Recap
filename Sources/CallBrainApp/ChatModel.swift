@@ -180,10 +180,49 @@ final class ChatModel {
         } catch {
             if Task.isCancelled || generation != gen { return }   // stopped/superseded — not an error to surface
             if let i = messages.firstIndex(where: { $0.id == pid }) {
-                messages[i].text = "Couldn't answer: \(error.localizedDescription)"
+                messages[i].text = Self.friendlyFailure(error)
                 messages[i].pending = false
+                messages[i].status = "failed"      // AskMessageView renders this as an error, not an answer
+                messages[i].steps = []             // a failed turn didn't "reason" to an answer — clear the timeline
+                messages[i].citations = []         // and it has no sources
             }
         }
+    }
+
+    /// Map an Ask failure to plain-language copy — a missing CLI / stopped Ollama / offline user should see
+    /// a friendly, actionable line, never a developer-flavored `localizedDescription`.
+    static func friendlyFailure(_ error: Error) -> String {
+        if let llm = error as? LLMError {
+            switch llm {
+            case .notInstalled, .launchFailed, .allProvidersFailed:
+                return "Couldn't reach the AI engine — check Engine status on the Home screen."
+            case .rateLimited:
+                return "Rate limited — try again shortly."
+            case .timedOut:
+                return "That took too long to answer. Try again."
+            default:
+                break
+            }
+        }
+        let ns = error as NSError
+        if ns.domain == NSURLErrorDomain {   // offline / connection dropped mid-research
+            return "Couldn't reach the AI engine — check your connection and try again."
+        }
+        return "Couldn't reach the AI engine — check Engine status on the Home screen."
+    }
+
+    /// Retry after a failed turn (convention #4): drop the failed assistant bubble and re-send the last
+    /// user question. A no-op if there's nothing to retry or a generation is already running.
+    func retryLast(_ env: AppEnvironment) {
+        guard task == nil else { return }
+        // Find the last user turn; drop everything after it (the failed assistant bubble) and re-send.
+        guard let userIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
+        let question = messages[userIdx].text
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Remove the failed assistant bubble(s) AND the user turn itself — send() re-appends the user bubble,
+        // so this avoids a duplicate "You" row while keeping the earlier conversation history intact.
+        messages.removeSubrange(userIdx...)
+        send(question, env)
     }
 
     // MARK: - persistence
