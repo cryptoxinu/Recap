@@ -108,7 +108,11 @@ struct TasksView: View {
 
     private func load() {
         let status: ActionItem.Status? = filter == .all ? nil : (filter == .open ? .open : .done)
-        withAnimation(Theme.springy) { rows = (try? env.store.tasks(status: status)) ?? [] }
+        let store = env.store
+        Task {   // SQLite read OFF the main thread (Store is thread-safe) → filter switches never freeze
+            let r = await Task.detached { (try? store.tasks(status: status)) ?? [] }.value
+            withAnimation(Theme.springy) { rows = r }
+        }
     }
 
     private func tidy() {
@@ -139,9 +143,12 @@ struct TasksView: View {
 
     private func toggle(_ row: Store.TaskRow) {
         let next: ActionItem.Status = row.item.status == .open ? .done : .open
-        try? env.store.setTaskStatus(id: row.item.id, next)
-        load()
-        env.refreshReminders()   // keep the daily reminder count fresh
+        let store = env.store, id = row.item.id
+        Task {   // DB write off-main, then reload + refresh
+            await Task.detached { _ = try? store.setTaskStatus(id: id, next) }.value
+            load()
+            env.refreshReminders()   // keep the daily reminder count fresh
+        }
     }
 }
 

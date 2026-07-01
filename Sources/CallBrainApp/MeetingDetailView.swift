@@ -13,6 +13,7 @@ struct MeetingDetailView: View {
     @State private var noteLines: [String] = []      // populated for Gemini-notes meetings
     @State private var people: [Entity] = []         // native-NER people mentioned
     @State private var highlightGroupID: Int?
+    @State private var citedNoteSnippet = ""          // Gemini-notes accent snippet — resolved OFF-MAIN, cached
     @State private var tasks: [ActionItem] = []      // action items for this call (Summary tab)
     @State private var tab: Tab = .summary
     @State private var didAutoSummarize = false
@@ -67,13 +68,6 @@ struct MeetingDetailView: View {
         guard !q.isEmpty else { return 0 }
         return noteLines.filter { $0.lowercased().contains(q) }.count
     }
-    /// The cited note snippet to accent-tint (Gemini notes have no scroll anchors; gate MED).
-    private var citedNoteSnippet: String {
-        guard isNotes, let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first
-        else { return "" }
-        return String(hit.text.prefix(60))
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
@@ -103,7 +97,7 @@ struct MeetingDetailView: View {
                 await scrollToHighlight(proxy)
             }
             .onChange(of: highlightChunkID) { _, _ in
-                Task { recomputeHighlight(); await scrollToHighlight(proxy) }
+                Task { await resolveHighlight(); await scrollToHighlight(proxy) }
             }
             .onChange(of: env.titlesRevision) { _, _ in Task { await reloadMeta() } }
         }
@@ -338,15 +332,19 @@ struct MeetingDetailView: View {
 
     private func toggleTask(_ item: ActionItem) {
         let next: ActionItem.Status = item.status == .done ? .open : .done
-        // Only reflect the toggle in the UI if the row actually changed; otherwise reload so the checklist
-        // never lies about a task that was deleted/reconciled away.
-        if (try? env.store.setTaskStatus(id: item.id, next)) == true {
-            withAnimation(Theme.springy) {
-                if let i = tasks.firstIndex(where: { $0.id == item.id }) { tasks[i].status = next }
+        let store = env.store
+        // The DB write runs off-main; only reflect the toggle in the UI if the row actually changed,
+        // otherwise reload so the checklist never lies about a task that was deleted/reconciled away.
+        Task {
+            let changed = await Task.detached(operation: { (try? store.setTaskStatus(id: item.id, next)) == true }).value
+            if changed {
+                withAnimation(Theme.springy) {
+                    if let i = tasks.firstIndex(where: { $0.id == item.id }) { tasks[i].status = next }
+                }
+                env.refreshReminders()
+            } else {
+                await reloadMeta()
             }
-            env.refreshReminders()
-        } else {
-            Task { await reloadMeta() }
         }
     }
 
@@ -362,8 +360,10 @@ struct MeetingDetailView: View {
     /// Refresh just the meeting row + tasks (after a summary/regenerate lands) without rebuilding the
     /// transcript groups.
     private func reloadMeta() async {
-        let m = try? env.store.meeting(id: meetingID)
-        let t = (try? env.store.tasks(meetingID: meetingID)) ?? []
+        let store = env.store, id = meetingID
+        let (m, t) = await Task.detached(operation: {
+            ((try? store.meeting(id: id)), (try? store.tasks(meetingID: id)) ?? [])
+        }).value
         withAnimation(Theme.springy) {   // title/category/summary settle in, not pop
             if let m { meeting = m }
             tasks = t
@@ -445,14 +445,18 @@ struct MeetingDetailView: View {
         withAnimation(.easeInOut) { proxy.scrollTo(h, anchor: .center) }
     }
 
-    /// Map the cited chunk to a transcript group (best-effort text match).
-    private func recomputeHighlight() {
-        guard let cid = highlightChunkID, let hit = (try? env.store.chunks(ids: [cid]))?.first else {
-            highlightGroupID = nil; return
+    /// Resolve the cited chunk → a transcript group anchor + the Gemini-notes accent snippet. The single
+    /// SQLite read runs OFF the main thread (it was the synchronous chunk read that pinwheeled the tab
+    /// switch / citation tap); the in-memory group match is cheap and stays on the main actor.
+    private func resolveHighlight() async {
+        guard let cid = highlightChunkID else { highlightGroupID = nil; citedNoteSnippet = ""; return }
+        let store = env.store
+        guard let text = await Task.detached(operation: { (try? store.chunks(ids: [cid]))?.first?.text }).value else {
+            highlightGroupID = nil; citedNoteSnippet = ""; return
         }
-        let needle = String(hit.text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { highlightGroupID = nil; return }
-        highlightGroupID = groups.first(where: { g in
+        citedNoteSnippet = isNotes ? String(text.prefix(60)) : ""
+        let needle = String(text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
+        highlightGroupID = needle.isEmpty ? nil : groups.first(where: { g in
             g.lines.contains(where: { $0.contains(needle) || needle.contains($0.prefix(30)) })
         })?.id
     }
@@ -468,7 +472,7 @@ struct MeetingDetailView: View {
         noteLines = snap.noteLines
         groups = snap.groups
         recomputeMatches()
-        recomputeHighlight()
+        await resolveHighlight()
     }
 
     nonisolated static func buildSnapshot(store: Store, meetingID: String) -> LoadSnapshot {

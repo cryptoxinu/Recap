@@ -23,13 +23,13 @@ struct HomeView: View {
         }
         .navigationTitle("Home")
         .task {
-            withAnimation(Theme.springy) { meetings = env.recentMeetings() }
+            await loadMeetings()
             // Titles + categories are cheap; full summaries are generated LAZILY when a call is opened
             // (no eager 14B storm on launch — that was the fan/lag cause).
             env.backfillTitleIntelligence(); env.backfillCategories()
         }
         .onChange(of: env.titlesRevision) {   // live-refresh as AI titles/categories land — animated, not popped
-            withAnimation(Theme.springy) { meetings = env.recentMeetings() }
+            Task { await loadMeetings() }
         }
         .sheet(item: $openMeetingID) { id in
             NavigationStack {
@@ -38,6 +38,14 @@ struct HomeView: View {
             }
             .frame(minWidth: 1000, minHeight: 680)
         }
+    }
+
+    /// Load the recent-calls list OFF the main thread (Store is thread-safe), then animate it in — so Home
+    /// never blocks the UI on the SQLite read (launch or when a title/category lands).
+    private func loadMeetings() async {
+        let store = env.store
+        let m = await Task.detached { (try? store.recentMeetings()) ?? [] }.value
+        withAnimation(Theme.springy) { meetings = m }
     }
 
     private var mainColumn: some View {

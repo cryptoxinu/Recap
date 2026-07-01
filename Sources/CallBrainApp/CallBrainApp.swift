@@ -6,6 +6,7 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        MainThreadWatchdog.shared.startIfEnabled()   // CALLBRAIN_WATCHDOG=1 → logs any main-thread stall
         // Brand the Dock/⌘-Tab icon (works for the dev run too, which has no .icns bundle).
         if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
            let icon = NSImage(contentsOf: url) {
