@@ -6,6 +6,7 @@ struct HomeView: View {
     @State private var meetings: [Store.MeetingRow] = []
     @State private var chat = ChatModel()
     @State private var openMeetingID: String?
+    @State private var loadSeq = 0                    // drops out-of-order off-main meeting reloads
 
     private var greeting: String {
         switch Calendar.current.component(.hour, from: Date()) {
@@ -44,7 +45,9 @@ struct HomeView: View {
     /// never blocks the UI on the SQLite read (launch or when a title/category lands).
     private func loadMeetings() async {
         let store = env.store
+        loadSeq += 1; let seq = loadSeq
         let m = await Task.detached { (try? store.recentMeetings()) ?? [] }.value
+        guard loadSeq == seq else { return }   // a newer reload (title/category landed) superseded this one
         withAnimation(Theme.springy) { meetings = m }
     }
 

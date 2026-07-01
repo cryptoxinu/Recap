@@ -35,6 +35,41 @@ struct EntityExtractorTests {
         #expect(EntityExtractor.extract("").isEmpty)
     }
 
+    @Test("clean(): merges person spelling variants into the higher-count canonical (Sunny/Sunney)")
+    func mergesVariants() {
+        let raw = [
+            Entity(name: "Sunney", kind: .person, count: 5),
+            Entity(name: "Sunny", kind: .person, count: 2),
+            Entity(name: "Maxwell", kind: .person, count: 3),
+        ]
+        let cleaned = EntityExtractor.clean(raw)
+        let people = cleaned.filter { $0.kind == .person }.map(\.name)
+        #expect(people.contains("Sunney"))          // higher count wins
+        #expect(!people.contains("Sunny"))          // variant merged away
+        #expect(cleaned.first { $0.name == "Sunney" }?.count == 7)   // counts summed
+        #expect(people.contains("Maxwell"))
+    }
+
+    @Test("clean(): never merges distinct short names (Sam/Pam), keeps both")
+    func keepsDistinctShortNames() {
+        let raw = [Entity(name: "Sam", kind: .person, count: 2), Entity(name: "Pam", kind: .person, count: 2)]
+        let people = EntityExtractor.clean(raw).map(\.name)
+        #expect(people.contains("Sam") && people.contains("Pam"))
+    }
+
+    @Test("clean(): drops filler mis-tags (Wait) and tool names as people (Claude)")
+    func dropsFillerAndTools() {
+        let raw = [
+            Entity(name: "Wait", kind: .person, count: 4),
+            Entity(name: "Claude", kind: .person, count: 6),
+            Entity(name: "Zade", kind: .person, count: 3),
+        ]
+        let people = EntityExtractor.clean(raw).map(\.name)
+        #expect(!people.contains("Wait"))           // sentence-initial filler
+        #expect(!people.contains("Claude"))         // a tool, not an attendee
+        #expect(people.contains("Zade"))            // a real person survives
+    }
+
     @Test("LIVE: extracts real entities from the morning-sync notes",
           .enabled(if: FileManager.default.fileExists(atPath: DocxReaderTestsPath.realDocx)))
     func liveMorningSync() throws {

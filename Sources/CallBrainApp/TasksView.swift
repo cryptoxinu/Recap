@@ -10,6 +10,7 @@ struct TasksView: View {
     @State private var openMeetingID: String?
     @State private var tidying = false
     @State private var tidySummary: String?
+    @State private var loadSeq = 0                    // drops out-of-order off-main task reloads
 
     enum Filter: String, CaseIterable, Identifiable { case open = "Open", done = "Done", all = "All"; var id: String { rawValue } }
 
@@ -109,8 +110,10 @@ struct TasksView: View {
     private func load() {
         let status: ActionItem.Status? = filter == .all ? nil : (filter == .open ? .open : .done)
         let store = env.store
+        loadSeq += 1; let seq = loadSeq
         Task {   // SQLite read OFF the main thread (Store is thread-safe) → filter switches never freeze
             let r = await Task.detached { (try? store.tasks(status: status)) ?? [] }.value
+            guard loadSeq == seq else { return }   // a newer filter switch superseded this read
             withAnimation(Theme.springy) { rows = r }
         }
     }

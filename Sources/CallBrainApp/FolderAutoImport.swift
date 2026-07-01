@@ -68,7 +68,7 @@ final class FolderAutoImport {
             guard !fresh.isEmpty else { return }
             // Mark seen ONLY the files that actually queued — a failed import must stay retryable, never
             // get permanently skipped (audit HIGH).
-            let queued = self.env.importCoordinator.enqueueFilesReturningQueued(fresh)
+            let queued = await self.env.importCoordinator.enqueueFilesReturningQueued(fresh)
             seenArr.append(contentsOf: queued.map(\.path))
             if seenArr.count > Self.seenCap { seenArr = Array(seenArr.suffix(Self.seenCap)) }   // keep most recent
             UserDefaults.standard.set(seenArr, forKey: Self.seenKey)

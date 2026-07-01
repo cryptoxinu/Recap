@@ -355,7 +355,7 @@ final class GoogleDriveConnect {
             if live(), !pending.isEmpty {
                 // Mark synced ONLY the files that actually persisted an import job — a file whose job failed
                 // must NOT be recorded as synced (it would never retry; audit HIGH).
-                let queued = Set(env.importCoordinator.enqueueFilesReturningQueued(pending.map(\.url)))
+                let queued = Set(await env.importCoordinator.enqueueFilesReturningQueued(pending.map(\.url)))
                 for p in pending where queued.contains(p.url) { seenOrder.append(p.key) }
                 imported = queued.count
                 lastSyncCount += imported

@@ -17,16 +17,22 @@ final class ImportCoordinator {
 
     init(env: AppEnvironment) {
         self.env = env
-        reload()
-        requeueInterrupted()     // jobs left 'running' by a crash → back to 'queued' so drain resumes them
-        startDraining()          // pick up anything still queued from a previous session
+        Task { [weak self] in
+            await self?.reload()
+            await self?.requeueInterrupted()   // jobs left 'running' by a crash → 'queued' so drain resumes
+            self?.startDraining()              // pick up anything still queued from a previous session
+        }
     }
 
-    func reload() { jobs = (try? env.store.importJobs()) ?? [] }
+    /// Refresh the display list — the Store read runs OFF the main thread (audit: no main-thread SQLite).
+    func reload() async {
+        let store = env.store
+        jobs = await Task.detached { (try? store.importJobs()) ?? [] }.value
+    }
 
     /// True if any of these files has an extension CallBrain can read.
     /// Audio/video files we transcribe on-device (Phase 3) rather than parse as text.
-    static let mediaExtensions: Set<String> = ["mp4", "mov", "m4a", "wav", "webm", "mp3", "aac", "caf", "m4v"]
+    nonisolated static let mediaExtensions: Set<String> = ["mp4", "mov", "m4a", "wav", "webm", "mp3", "aac", "caf", "m4v"]
     static func isMedia(_ url: URL) -> Bool { mediaExtensions.contains(url.pathExtension.lowercased()) }
 
     static func importable(_ urls: [URL]) -> [URL] {
@@ -37,61 +43,73 @@ final class ImportCoordinator {
     }
 
     @discardableResult
-    func enqueueFiles(_ urls: [URL]) -> Int { enqueueFilesReturningQueued(urls).count }
+    func enqueueFiles(_ urls: [URL]) async -> Int { await enqueueFilesReturningQueued(urls).count }
 
     /// Like `enqueueFiles` but returns exactly the URLs that were durably queued, so a caller can record
     /// only what actually succeeded (Drive sync marks only enqueued files as synced — never a file whose
-    /// job failed to persist, which would silently drop it forever).
+    /// job failed to persist, which would silently drop it forever). ALL the row writes happen in a single
+    /// OFF-MAIN batch, so dropping a 500-file folder never freezes the UI (audit HIGH).
     @discardableResult
-    func enqueueFilesReturningQueued(_ urls: [URL]) -> [URL] {
+    func enqueueFilesReturningQueued(_ urls: [URL]) async -> [URL] {
         let files = Self.importable(urls)
-        var queued: [URL] = []
-        for url in files {
-            let job = ImportJob(id: newID(), sourceName: url.lastPathComponent,
-                                createdAt: now(), payloadKind: .file, payload: url.path)
-            if persist(job) { queued.append(url) }
+        guard !files.isEmpty else { return [] }
+        let store = env.store
+        let pairs = files.map { url in
+            (url, ImportJob(id: newID(), sourceName: url.lastPathComponent,
+                            createdAt: now(), payloadKind: .file, payload: url.path))
         }
-        if !queued.isEmpty { startDraining() }
+        let queued: [URL] = await Task.detached {
+            var ok: [URL] = []
+            for (url, job) in pairs { if (try? store.upsertImportJob(job)) != nil { ok.append(url) } }
+            return ok
+        }.value
+        if queued.count < files.count { lastError = "Some files couldn't be queued — try again." }
+        if !queued.isEmpty { await reload(); startDraining() }
         return queued
     }
 
     /// Archive migration (Phase 7): recursively scan a folder for importable transcripts + recordings and
-    /// enqueue them all into this same durable, serially-paced queue. Returns how many were enqueued.
+    /// enqueue them all into this same durable, serially-paced queue. The folder walk (up to 5000 files) AND
+    /// the row writes run OFF the main thread (audit HIGH). Returns how many were enqueued.
     @discardableResult
-    func enqueueFolder(_ folder: URL) -> Int {
-        enqueueFiles(Self.scanFolder(folder))
+    func enqueueFolder(_ folder: URL) async -> Int {
+        let scanned = await Task.detached { Self.scanFolder(folder) }.value
+        return await enqueueFiles(scanned)
     }
 
-    /// All importable files under a directory (recursive), skipping hidden/package contents.
-    static func scanFolder(_ folder: URL, max: Int = 5000) -> [URL] {
+    /// All importable files under a directory (recursive), skipping hidden/package contents. `nonisolated`
+    /// so the (potentially large) folder walk can run OFF the main thread.
+    nonisolated static func scanFolder(_ folder: URL, max: Int = 5000) -> [URL] {
         FolderScanner.importableFiles(in: folder,
                                       recognized: IngestEngine.readableExtensions.union(mediaExtensions), max: max)
     }
 
     /// Returns false if the job couldn't be persisted (so the caller can keep the user's text).
     @discardableResult
-    func enqueuePaste(_ text: String) -> Bool {
+    func enqueuePaste(_ text: String) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         let job = ImportJob(id: newID(), sourceName: "Pasted text",
                             createdAt: now(), payloadKind: .paste, payload: trimmed)
-        guard persist(job) else { return false }
+        guard await persist(job) else { return false }
         startDraining()
         return true
     }
 
-    func clearFinished() {
-        do { try env.store.clearFinishedImportJobs(); reload() }
-        catch { lastError = "Couldn't clear finished imports: \(error.localizedDescription)" }
+    func clearFinished() async {
+        let store = env.store
+        let ok = await Task.detached { (try? store.clearFinishedImportJobs()) != nil }.value
+        if ok { await reload() } else { lastError = "Couldn't clear finished imports." }
     }
 
-    func remove(_ job: ImportJob) {
-        try? env.store.deleteImportJob(id: job.id)
-        reload()
+    func remove(_ job: ImportJob) async {
+        let store = env.store, id = job.id
+        await Task.detached { try? store.deleteImportJob(id: id) }.value
+        await reload()
     }
 
-    func confirmReviewed(_ job: ImportJob) {
-        var j = job; j.state = .done; j.message = nil; _ = persist(j)
+    func confirmReviewed(_ job: ImportJob) async {
+        var j = job; j.state = .done; j.message = nil; _ = await persist(j)
     }
 
     // MARK: - processing
@@ -112,21 +130,24 @@ final class ImportCoordinator {
 
     private func drain() async {
         // Pull the full pending set from the store each pass (not the display list) so a large backlog
-        // fully drains and newly-enqueued jobs are seen.
-        while let job = (try? env.store.pendingImportJobs())?.first(where: { $0.state == .queued }) {
+        // fully drains and newly-enqueued jobs are seen. The read runs off-main (audit: no main-thread SQLite).
+        let store = env.store
+        while let job = await Task.detached(operation: {
+            (try? store.pendingImportJobs())?.first(where: { $0.state == .queued })
+        }).value {
             await run(job)
         }
         env.refreshReminders()   // new imports can add tasks → keep the reminder count fresh
     }
 
     private func run(_ job: ImportJob) async {
-        var j = job; j.state = .running; _ = persist(j)
+        var j = job; j.state = .running; _ = await persist(j)
 
         do {
             // Media file → on-device transcription path (decode → WhisperKit → FluidAudio → ingest).
             if job.payloadKind == .file, let path = job.payload, Self.isMedia(URL(fileURLWithPath: path)) {
                 try await runTranscription(job: &j, path: path)
-                _ = persist(j)
+                _ = await persist(j)
                 return
             }
 
@@ -163,11 +184,11 @@ final class ImportCoordinator {
                 env.summarizeInBackground(outcome.meetingID)            // queue the full Summary-tab pass
                 env.classifyInBackground(outcome.meetingID)             // Ambient / Further Health / Other tag
             }
-            _ = persist(j)
+            _ = await persist(j)
         } catch {
             j.state = .failed
             j.message = Self.friendly(error)
-            _ = persist(j)
+            _ = await persist(j)
         }
     }
 
@@ -219,25 +240,26 @@ final class ImportCoordinator {
     /// Persist a job and refresh the display list. Returns false (and surfaces `lastError`) on failure
     /// so callers never assume an import was queued when it wasn't (Codex audit: no silent drop).
     @discardableResult
-    private func persist(_ job: ImportJob) -> Bool {
-        do { try env.store.upsertImportJob(job); reload(); return true }
-        catch {
-            lastError = "Couldn't save the import to the queue: \(error.localizedDescription)"
-            return false
-        }
+    private func persist(_ job: ImportJob) async -> Bool {
+        let store = env.store
+        let ok = await Task.detached { (try? store.upsertImportJob(job)) != nil }.value
+        if ok { await reload() }
+        else { lastError = "Couldn't save the import to the queue." }
+        return ok
     }
 
     /// On launch: a job left in `.running` was interrupted mid-import — requeue it (re-running is
     /// idempotent via content-hash dedupe, so a crash between meeting-commit and job-update self-heals).
     /// Scans the FULL pending set from the store, not the newest-100 display list (re-audit HIGH: an
     /// interrupted job beyond the display cap would otherwise stay stuck `.running` forever).
-    private func requeueInterrupted() {
-        let running = ((try? env.store.pendingImportJobs()) ?? []).filter { $0.state == .running }
+    private func requeueInterrupted() async {
+        let store = env.store
+        let running = await Task.detached { ((try? store.pendingImportJobs()) ?? []).filter { $0.state == .running } }.value
         for job in running {
             var j = job
             if j.payloadKind != nil { j.state = .queued; j.message = nil }
             else { j.state = .failed; j.message = "Interrupted (app closed mid-import)." }
-            _ = persist(j)
+            _ = await persist(j)
         }
     }
 

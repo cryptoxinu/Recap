@@ -47,11 +47,11 @@ struct MenuBarView: View {
 
     var body: some View {
         let active = env.importCoordinator.jobs.filter { $0.state == .running || $0.state == .queued }.count
-        let open = env.openTaskCount()
+        let open = env.openTaskCountCached          // cached — no synchronous COUNT read on the main thread
         if active > 0 {
             Text("Importing \(active) item\(active == 1 ? "" : "s")…")
         } else {
-            Text("CallBrain — \(env.meetingCount()) calls")
+            Text("CallBrain — \(env.meetingCountCached) calls")
         }
         if open > 0 { Text("\(open) open action item\(open == 1 ? "" : "s")") }
         Divider()

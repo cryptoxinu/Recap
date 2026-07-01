@@ -90,7 +90,8 @@ struct ImportView: View {
             .foregroundStyle(dropTargeted ? Theme.accent : Theme.hairline))
         .animation(.easeInOut(duration: 0.15), value: dropTargeted)
         .dropDestination(for: URL.self) { urls, _ in
-            coordinator.enqueueFiles(urls) > 0
+            Task { await coordinator.enqueueFiles(urls) }   // enqueue off-main; accept if any are importable
+            return !ImportCoordinator.importable(urls).isEmpty
         } isTargeted: { dropTargeted = $0 }
     }
 
@@ -102,7 +103,7 @@ struct ImportView: View {
                                      .init(filenameExtension: "srt"), .init(filenameExtension: "vtt"),
                                      .init(filenameExtension: "md"), .movie, .audio, .mpeg4Movie,
                                      .init(filenameExtension: "m4a")].compactMap { $0 }
-        if panel.runModal() == .OK { coordinator.enqueueFiles(panel.urls) }
+        if panel.runModal() == .OK { let urls = panel.urls; Task { await coordinator.enqueueFiles(urls) } }
     }
 
     /// Archive migration: pick a folder; recursively enqueue every transcript/recording inside it.
@@ -114,8 +115,10 @@ struct ImportView: View {
         panel.prompt = "Import"
         panel.message = "Choose a folder of transcripts and recordings — CallBrain imports them all."
         if panel.runModal() == .OK, let folder = panel.url {
-            let n = coordinator.enqueueFolder(folder)
-            if n == 0 { coordinator.lastError = "No importable transcripts or recordings found in that folder." }
+            Task {
+                let n = await coordinator.enqueueFolder(folder)
+                if n == 0 { coordinator.lastError = "No importable transcripts or recordings found in that folder." }
+            }
         }
     }
 
@@ -140,7 +143,8 @@ struct ImportView: View {
                 HStack {
                     Button {
                         // Only clear the box once the job is durably queued (MEDIUM-3: never lose paste).
-                        if coordinator.enqueuePaste(raw) { raw = "" }
+                        let text = raw
+                        Task { if await coordinator.enqueuePaste(text) { raw = "" } }
                     } label: {
                         Label("Import pasted text", systemImage: "sparkles")
                     }
@@ -177,15 +181,15 @@ struct ImportView: View {
                     }
                     Text(queueSummary).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Clear finished") { coordinator.clearFinished() }
+                    Button("Clear finished") { Task { await coordinator.clearFinished() } }
                         .buttonStyle(.plain).font(.callout).foregroundStyle(.secondary)
                 }
                 VStack(spacing: 0) {
                     ForEach(coordinator.jobs) { job in
                         JobRow(job: job,
                                onOpen: { openMeetingID = job.meetingID },
-                               onConfirm: { coordinator.confirmReviewed(job) },
-                               onRemove: { coordinator.remove(job) })
+                               onConfirm: { Task { await coordinator.confirmReviewed(job) } },
+                               onRemove: { Task { await coordinator.remove(job) } })
                         if job.id != coordinator.jobs.last?.id { Divider() }
                     }
                 }

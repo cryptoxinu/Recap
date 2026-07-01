@@ -14,6 +14,8 @@ struct MeetingDetailView: View {
     @State private var people: [Entity] = []         // native-NER people mentioned
     @State private var highlightGroupID: Int?
     @State private var citedNoteSnippet = ""          // Gemini-notes accent snippet — resolved OFF-MAIN, cached
+    @State private var highlightSeq = 0               // drops out-of-order highlight resolves
+    @State private var reloadMetaSeq = 0              // drops out-of-order meta reloads
     @State private var tasks: [ActionItem] = []      // action items for this call (Summary tab)
     @State private var tab: Tab = .summary
     @State private var didAutoSummarize = false
@@ -360,10 +362,12 @@ struct MeetingDetailView: View {
     /// Refresh just the meeting row + tasks (after a summary/regenerate lands) without rebuilding the
     /// transcript groups.
     private func reloadMeta() async {
+        reloadMetaSeq += 1; let seq = reloadMetaSeq
         let store = env.store, id = meetingID
         let (m, t) = await Task.detached(operation: {
             ((try? store.meeting(id: id)), (try? store.tasks(meetingID: id)) ?? [])
         }).value
+        guard reloadMetaSeq == seq else { return }        // a newer reload superseded this one
         withAnimation(Theme.springy) {   // title/category/summary settle in, not pop
             if let m { meeting = m }
             tasks = t
@@ -449,11 +453,12 @@ struct MeetingDetailView: View {
     /// SQLite read runs OFF the main thread (it was the synchronous chunk read that pinwheeled the tab
     /// switch / citation tap); the in-memory group match is cheap and stays on the main actor.
     private func resolveHighlight() async {
+        highlightSeq += 1; let seq = highlightSeq
         guard let cid = highlightChunkID else { highlightGroupID = nil; citedNoteSnippet = ""; return }
         let store = env.store
-        guard let text = await Task.detached(operation: { (try? store.chunks(ids: [cid]))?.first?.text }).value else {
-            highlightGroupID = nil; citedNoteSnippet = ""; return
-        }
+        let text = await Task.detached(operation: { (try? store.chunks(ids: [cid]))?.first?.text }).value
+        guard highlightSeq == seq else { return }        // a newer highlight superseded this resolve
+        guard let text else { highlightGroupID = nil; citedNoteSnippet = ""; return }
         citedNoteSnippet = isNotes ? String(text.prefix(60)) : ""
         let needle = String(text.prefix(40)).trimmingCharacters(in: .whitespacesAndNewlines)
         highlightGroupID = needle.isEmpty ? nil : groups.first(where: { g in
@@ -484,7 +489,9 @@ struct MeetingDetailView: View {
                 ? ((try? store.transcript(meetingID: meetingID)) ?? []).map(\.text)
                 : utts.map(\.text)
         } else {
-            snap.people = ((try? store.entities(meetingID: meetingID)) ?? [])
+            // Clean the stored NER people RETROACTIVELY (merge spelling variants, drop filler mis-tags like
+            // "Wait" and tool names like "Claude") so the attendee chips read like real people.
+            snap.people = EntityExtractor.clean((try? store.entities(meetingID: meetingID)) ?? [])
                 .filter { $0.kind == .person && $0.count >= 2 }.prefix(10).map { $0 }
         }
         let rows: [(speaker: String, t: Double?, inferred: Bool, text: String)]
@@ -494,12 +501,16 @@ struct MeetingDetailView: View {
         } else {
             rows = utts.map { (speaker: $0.speaker ?? "—", t: $0.tStart, inferred: $0.isInferred, text: $0.text) }
         }
+        // Normalize speaker labels for display: raw diarization tokens (SPEAKER_00) + empty/"—"/"Unknown"
+        // fallbacks become clean "Speaker 1/2/3"; real names pass through. Grouping keys on the display name.
+        let nameMap = SpeakerResolver.displayNames(for: rows.map(\.speaker))
         var result: [TurnGroup] = []
         for r in rows {
-            if let last = result.last, last.speaker == r.speaker {
+            let speaker = nameMap[r.speaker] ?? r.speaker
+            if let last = result.last, last.speaker == speaker {
                 result[result.count - 1].lines.append(r.text)
             } else {
-                result.append(TurnGroup(id: result.count, speaker: r.speaker, tStart: r.t,
+                result.append(TurnGroup(id: result.count, speaker: speaker, tStart: r.t,
                                         isInferred: r.inferred, lines: [r.text]))
             }
         }

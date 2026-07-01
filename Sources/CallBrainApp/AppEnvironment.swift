@@ -77,6 +77,7 @@ final class AppEnvironment {
         self.drive = GoogleDriveConnect(env: self)
         self.summaries = SummaryScheduler(env: self)
         self.fathom = FathomConnect(env: self)
+        refreshReminders()   // seed the cached menu-bar counts off-main (never blocks launch)
     }
 
     static let providerKey = "callbrain.providerPrimary"
@@ -109,6 +110,11 @@ final class AppEnvironment {
     func meetingCount() -> Int { (try? store.meetingCount()) ?? 0 }
     func openTaskCount() -> Int { (try? store.openTaskCount()) ?? 0 }
     func recentMeetings() -> [Store.MeetingRow] { (try? store.recentMeetings()) ?? [] }
+
+    /// Cached counts for the menu-bar surface, refreshed OFF-MAIN by `refreshReminders()` (called after
+    /// every mutation) — so MenuBarView's body never does a synchronous COUNT read on the main thread (audit).
+    private(set) var meetingCountCached = 0
+    private(set) var openTaskCountCached = 0
 
     /// Bumps when a call's AI title/summary lands, so meeting lists can live-refresh.
     var titlesRevision = 0
@@ -251,8 +257,9 @@ final class AppEnvironment {
     }
 
     /// User picked a category by hand — pinned (auto-classification won't overwrite it).
-    func setCategoryManual(_ meetingID: String, _ category: CallCategory) {
-        try? store.setCategory(id: meetingID, category: category.rawValue, confidence: 1.0, manual: true)
+    func setCategoryManual(_ meetingID: String, _ category: CallCategory) async {
+        let store = self.store, raw = category.rawValue
+        await Task.detached { try? store.setCategory(id: meetingID, category: raw, confidence: 1.0, manual: true) }.value
         titlesRevision &+= 1
     }
 
@@ -309,6 +316,17 @@ final class AppEnvironment {
         catch { return false }
     }
 
+    /// Off-main delete: the cascade + citation scrub (multi-statement) and the reminder count read run OFF
+    /// the main thread so deleting a call never freezes the list (audit HIGH). Returns success on the main actor.
+    func deleteMeetingAsync(_ id: String) async -> Bool {
+        let store = self.store
+        let ok = await Task.detached { do { try store.deleteMeeting(id: id); return true } catch { return false } }.value
+        guard ok else { return false }
+        meetingChats[id] = nil
+        refreshReminders()            // updates cached counts + reminder off-main
+        return true
+    }
+
     /// The (background-survivable) AskFred chat for a call, created on first open and reused thereafter.
     /// Capped so a long session that opens many calls can't pin an unbounded number of ChatModels — idle
     /// chats are evicted first, never one with an answer in flight (SME).
@@ -327,7 +345,20 @@ final class AppEnvironment {
 
     /// Re-arm the daily reminder with the current open-task count — call whenever tasks change (completed,
     /// imported, or a meeting deleted) so a scheduled notification never fires a stale count (P6 gate MED).
-    func refreshReminders() { NotificationManager.refresh(openTaskCount: openTaskCount()) }
+    /// Re-arm the daily reminder AND refresh the cached menu-bar counts — the two COUNT reads run OFF the
+    /// main thread (audit: no synchronous SQLite on main). Fire-and-forget; safe to call from anywhere.
+    func refreshReminders() {
+        let store = self.store
+        Task { [weak self] in
+            let (m, t) = await Task.detached {
+                ((try? store.meetingCount()) ?? 0, (try? store.openTaskCount()) ?? 0)
+            }.value
+            guard let self else { return }
+            self.meetingCountCached = m
+            self.openTaskCountCached = t
+            NotificationManager.refresh(openTaskCount: t)
+        }
+    }
 
     // MARK: - backup / restore (Phase 8)
 

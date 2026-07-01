@@ -44,29 +44,47 @@ final class ChatModel {
         }
     }
 
+    /// Monotonic sequence for Recents reloads — a slower earlier read can't clobber a newer one
+    /// (last-issued wins, not last-completer; audit MED: overlapping off-main refreshes race).
+    @ObservationIgnored private var recentsSeq = 0
+
     /// Reload the Recents rail. The Store read runs OFF the main thread (Store is thread-safe) so opening
     /// the Ask tab or finishing an answer never blocks the UI; the result is assigned back on the main actor.
     func refreshRecents(_ env: AppEnvironment) {
         let store = env.store, mid = meetingID
+        recentsSeq += 1; let seq = recentsSeq
         Task { [weak self] in
             let r = await Task.detached {
                 mid == nil ? ((try? store.globalConversations()) ?? [])
                            : ((try? store.conversations(meetingID: mid!)) ?? [])
             }.value
-            self?.recents = r
+            guard let self, self.recentsSeq == seq else { return }   // a newer refresh superseded this one
+            self.recents = r
         }
     }
 
-    func newChat() { messages = []; conversationID = nil }
+    /// Abandon the in-flight turn — starting a new chat or switching threads discards the current answer:
+    /// cancel the CLI subprocess, clear busy/task, and bump `generation` so any in-flight persist or answer
+    /// write bails instead of clobbering the new thread (audit HIGH: ensureConversation reentrancy).
+    private func abandonInFlight() {
+        task?.cancel(); task = nil; busy = false; generation += 1
+    }
+
+    func newChat() { abandonInFlight(); messages = []; conversationID = nil }
 
     /// Open a saved conversation. The messages read + mapping happen off-main, so tapping a Recents row
-    /// never freezes the UI on a large thread.
+    /// never freezes the UI on a large thread. Messages clear immediately (no stale previous-thread flash),
+    /// and the async assign is generation-guarded so a rapid second selection can't land out of order.
     func load(_ conv: Conversation, _ env: AppEnvironment) {
+        abandonInFlight()
         conversationID = conv.id
+        messages = []
+        let gen = generation
         let store = env.store, cid = conv.id
         Task { [weak self] in
             let rows = await Task.detached { (try? store.messages(conversationID: cid)) ?? [] }.value
-            self?.messages = rows.map { m in
+            guard let self, self.generation == gen else { return }   // superseded by another load/newChat/send
+            self.messages = rows.map { m in
                 AskMessage(role: m.role == .user ? .user : .assistant, text: m.text,
                            citations: m.citations.map {
                                Cite(tag: $0.tag, meetingID: $0.meetingID, chunkID: $0.chunkID,
@@ -120,7 +138,8 @@ final class ChatModel {
         // Ensure a conversation exists (auto-titled from the first question), then persist the user turn —
         // both OFF-MAIN and serialized (conversation row before its messages, FK-safe). nil = couldn't
         // persist; the chat still works in-memory but we DON'T pretend it's saved (Codex P4.5 gate HIGH).
-        let convID = await ensureConversation(firstQuestion: q, env)
+        let convID = await ensureConversation(firstQuestion: q, env, gen: gen)
+        if Task.isCancelled || generation != gen { return }   // abandoned during the conversation upsert
         if let convID { await persist(.user, text: q, citations: [], conversationID: convID, env) }
 
         // Live reasoning timeline: append each real pipeline step to the pending message.
@@ -172,7 +191,7 @@ final class ChatModel {
     /// Create the conversation row (OFF-MAIN — Store is thread-safe); return its id ONLY if the insert
     /// succeeded (else nil + flag the failure, so we never show a "saved" chat that silently vanishes on
     /// relaunch — gate HIGH). Awaited before any message persist so the FK (messages→conversation) holds.
-    private func ensureConversation(firstQuestion q: String, _ env: AppEnvironment) async -> String? {
+    private func ensureConversation(firstQuestion q: String, _ env: AppEnvironment, gen: Int) async -> String? {
         if let id = conversationID { return id }
         let id = "conv_" + UUID().uuidString
         let now = Date().timeIntervalSince1970
@@ -181,6 +200,13 @@ final class ChatModel {
         let ok = await Task.detached {
             do { try store.upsertConversation(conv); return true } catch { return false }
         }.value
+        // Re-validate after the suspension: if the user started a new chat or opened another thread while
+        // the upsert was in flight, DON'T clobber the model's conversationID — roll the orphan row back
+        // instead of binding this turn to a conversation the user abandoned (audit HIGH: reentrancy race).
+        guard generation == gen, conversationID == nil else {
+            Task.detached { try? store.deleteConversation(id: id) }
+            return nil
+        }
         if ok { conversationID = id; return id }
         saveFailed = true
         return nil

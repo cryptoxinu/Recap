@@ -10,6 +10,7 @@ struct MeetingsView: View {
     @State private var showDupReview = false
     @State private var pendingDelete: Store.MeetingRow?
     @State private var deleteError: String?
+    @State private var reloadSeq = 0                      // drops out-of-order off-main reloads
     // Navigation path (seedable for screenshot QA: CALLBRAIN_OPEN_MEETING=<id> opens straight to the workspace).
     @State private var path: [String] = {
         let id = ProcessInfo.processInfo.environment["CALLBRAIN_OPEN_MEETING"] ?? ""
@@ -49,7 +50,7 @@ struct MeetingsView: View {
                                 .contextMenu {
                                     Menu {
                                         ForEach(CallCategory.allCases, id: \.self) { c in
-                                            Button { env.setCategoryManual(m.id, c); reload() } label: {
+                                            Button { Task { await env.setCategoryManual(m.id, c); reload() } } label: {
                                                 Label(c.label, systemImage: CallCategory(stored: m.category) == c ? "checkmark" : "circle")
                                             }
                                         }
@@ -89,13 +90,14 @@ struct MeetingsView: View {
             titleVisibility: .visible
         ) {
             Button("Delete call", role: .destructive) {
-                if let m = pendingDelete {
-                    if env.deleteMeeting(m.id) {
+                guard let m = pendingDelete else { return }
+                pendingDelete = nil
+                Task { @MainActor in                     // cascade delete runs off-main (audit HIGH)
+                    if await env.deleteMeetingAsync(m.id) {
                         path.removeAll { $0 == m.id }   // pop the workspace if this call is open (SME)
                         reload()
                     } else { deleteError = "Couldn't delete that call." }
                 }
-                pendingDelete = nil
             }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: {
@@ -137,12 +139,17 @@ struct MeetingsView: View {
     }
 
     private func reload() {
-        // Animate so AI titles/categories/summaries settle in (rows reorder, pills fade) instead of popping.
-        withAnimation(Theme.springy) { meetings = env.recentMeetings() }
-        // The duplicate scan is an N+1 query — run it OFF the main thread so it never freezes the list.
+        // BOTH the meeting-list SELECT (up to 200 rows) and the N+1 duplicate scan run OFF the main thread
+        // (audit HIGH — the list read was still synchronous on main). A sequence token drops a slower earlier
+        // reload so results can't land out of order (last-issued wins). Animate so titles/pills settle in.
         let store = env.store
-        Task {
+        reloadSeq += 1; let seq = reloadSeq
+        Task { @MainActor in
+            let m = await Task.detached { (try? store.recentMeetings()) ?? [] }.value
+            guard reloadSeq == seq else { return }
+            withAnimation(Theme.springy) { meetings = m }
             let c = await Task.detached { DuplicateScan.count(store) }.value
+            guard reloadSeq == seq else { return }
             withAnimation(Theme.springy) { dupCount = c }
         }
     }
