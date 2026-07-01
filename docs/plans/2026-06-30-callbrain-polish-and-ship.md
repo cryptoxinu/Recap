@@ -23,8 +23,8 @@ phase** · drive everything (founder is a non-coder) · production-grade.
 | 2 | Transcript speaker / name recognition rebuild | ✅ DONE | EntityExtractor.clean + SpeakerResolver, off-main wiring; 192 tests (+8) |
 | 3 | Home cards → live provider picker + engine status | ✅ DONE | both popovers verified live (all health dots green); Codex re-audit 5 findings fixed |
 | 4 | Final UI/UX polish + edge-case hardening | ✅ DONE | review workflow → 34 findings fixed; Codex audit → 8 more fixed (retry dup/wrong-turn, DateFormatter race, typed summary outcome); 192 tests; verified live |
-| 5 | Big Codex audit sweep + remediate | ▶ in progress | — |
-| 6 | Install to /Applications + Desktop + icon | ☐ | — |
+| 5 | Big Codex audit sweep + remediate | ✅ DONE | 3-lens ship-gate workflow → 6 findings fixed (env-scrub security, SpeakerResolver swap, Store IN-clause json_each, connect gen-guards); audit doc; 193 tests |
+| 6 | Install to /Applications + Desktop + icon | ▶ in progress | — |
 | 7 | Private GitHub repo (cryptoxinu) + README + push/merge | ☐ | — |
 
 Each phase: **build (`swift build`) + `swift test` + Codex audit (`-s read-only`, high reasoning) +
