@@ -65,7 +65,10 @@ public enum EntityExtractor {
     /// only when both are ≥4 chars, share the first two letters, and differ by a single edit. Keeps the
     /// higher-count spelling (tiebreak: the longer, more-complete form) and sums their counts.
     private static func mergePersonVariants(_ entities: [Entity]) -> [Entity] {
-        var people = entities.filter { $0.kind == .person }.sorted { $0.count > $1.count }
+        // Deterministic order (count desc, then name) — areSamePerson is non-transitive, so a stable fold
+        // order guarantees the same input always merges the same way (audit LOW: order-dependent result).
+        var people = entities.filter { $0.kind == .person }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
         let others = entities.filter { $0.kind != .person }
         var canonical: [Entity] = []
         for p in people {

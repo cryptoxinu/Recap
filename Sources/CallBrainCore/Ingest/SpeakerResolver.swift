@@ -10,11 +10,14 @@ import Foundation
 ///   clean `Speaker N` numbering, so a partially-labelled transcript reads consistently.
 /// - Real names (`Zade`, `Max Lang`) are kept as-is.
 public enum SpeakerResolver {
-    /// A label carries no real identity — it's a placeholder we should renumber cleanly.
+    /// A label carries no real identity — it's a RAW diarization placeholder we should renumber cleanly.
+    /// NOTE: an already-clean "Speaker 1" / "Speaker 2" (the word + a SPACE + a number) is NOT generic — it
+    /// passes through unchanged, so we never re-number and accidentally SWAP two speakers that happen to
+    /// appear out of order (audit MED). Only underscore/no-separator raw tokens + bare/empty fallbacks match.
     static func isGeneric(_ raw: String) -> Bool {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if s.isEmpty || s == "—" || s == "-" || s == "?" || s == "unknown" || s == "speaker" { return true }
-        if s.hasPrefix("speaker") { return true }                                   // "speaker 1", "speaker_00"
+        if s.range(of: #"^speaker[_]?\d+$"#, options: .regularExpression) != nil { return true }  // SPEAKER_00, speaker00
         if s.range(of: #"^(spk|s)[ _]?\d+$"#, options: .regularExpression) != nil { return true }  // spk0, s2
         return false
     }

@@ -95,9 +95,22 @@ public protocol WebResearchProvider: Sendable {
 enum Subprocess {
     struct Output: Sendable { let stdout: String; let stderr: String; let exitCode: Int32 }
 
-    /// Run `executable` with `args`, optionally piping `stdin`. Removes `scrub` env vars (→ forces CLI
-    /// subscription auth), sets `cwd`, drains stdout+stderr concurrently (no pipe-buffer deadlock),
-    /// and kills the child after `timeout`.
+    /// A secret-bearing env var name that should NOT be inherited by a spawned CLI (defense-in-depth: the
+    /// child is unsandboxed, so beyond the named `scrub` list we also strip anything that PATTERN-matches a
+    /// credential — API keys, tokens, secrets, and provider redirect vars like ANTHROPIC_BASE_URL — so a
+    /// secret in the launch environment can't leak to (or redirect) the child. Audit MED.
+    static func isSecretEnvKey(_ key: String) -> Bool {
+        let k = key.uppercased()
+        if k == "GOOGLE_APPLICATION_CREDENTIALS" { return true }
+        if k.hasPrefix("AWS_") { return true }
+        for s in ["_API_KEY", "_ACCESS_KEY", "_SECRET_KEY", "_SECRET_ACCESS_KEY", "_TOKEN", "_SECRET",
+                  "_BASE_URL", "_PASSWORD", "_CREDENTIALS", "_AUTH_TOKEN"] where k.hasSuffix(s) { return true }
+        return false
+    }
+
+    /// Run `executable` with `args`, optionally piping `stdin`. Filters secret-bearing env vars (the `scrub`
+    /// list PLUS pattern-matched credentials → forces CLI subscription auth + no secret leak), sets `cwd`,
+    /// drains stdout+stderr concurrently (no pipe-buffer deadlock), and kills the child after `timeout`.
     static func run(executable: String, args: [String], stdin: String? = nil, cwd: String? = nil,
                     scrub: [String] = [], extraEnv: [String: String] = [:],
                     timeout: TimeInterval = 120) async throws -> Output {
@@ -107,7 +120,8 @@ enum Subprocess {
         if let cwd { h.process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         var env = ProcessInfo.processInfo.environment
         for k in scrub { env.removeValue(forKey: k) }
-        for (k, v) in extraEnv { env[k] = v }
+        env = env.filter { !Self.isSecretEnvKey($0.key) }        // strip any leftover secret-bearing var
+        for (k, v) in extraEnv { env[k] = v }                    // then re-add anything explicitly intended
         h.process.environment = env
         h.process.standardOutput = h.out
         h.process.standardError = h.err

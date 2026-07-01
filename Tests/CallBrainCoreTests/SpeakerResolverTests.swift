@@ -11,14 +11,17 @@ struct SpeakerResolverTests {
         #expect(out == ["Speaker 1", "Speaker 2", "Speaker 1", "Speaker 3"])
     }
 
-    @Test("already-numbered 'Speaker N' + spk/S variants are treated as generic and renumbered cleanly")
+    @Test("raw spk/S/underscore tokens are generic; an already-clean 'Speaker N' is NOT (no renumber → no swap)")
     func handlesVariants() {
-        #expect(SpeakerResolver.isGeneric("Speaker 1"))
         #expect(SpeakerResolver.isGeneric("spk0"))
         #expect(SpeakerResolver.isGeneric("S2"))
         #expect(SpeakerResolver.isGeneric("Speaker_00"))
+        #expect(!SpeakerResolver.isGeneric("Speaker 1"))   // already clean (space + number) — leave it alone
+        #expect(!SpeakerResolver.isGeneric("Speaker 2"))
         let out = SpeakerResolver.resolve(["spk1", "spk2", "spk1"])
         #expect(out == ["Speaker 1", "Speaker 2", "Speaker 1"])
+        // Clean "Speaker N" pass through unchanged even when they appear out of order (no swap).
+        #expect(SpeakerResolver.resolve(["Speaker 2", "Speaker 1"]) == ["Speaker 2", "Speaker 1"])
     }
 
     @Test("empty / — / Unknown / bare Speaker fallbacks are renumbered, not shown raw")

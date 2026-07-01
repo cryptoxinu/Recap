@@ -22,8 +22,8 @@ phase** · drive everything (founder is a non-coder) · production-grade.
 | 1 | Pinwheel root-cause sweep (main-thread audit) | ✅ DONE | every Store call off-main; cliclick tab-flip verified; 4-lens audit → 10 findings ALL remediated |
 | 2 | Transcript speaker / name recognition rebuild | ✅ DONE | EntityExtractor.clean + SpeakerResolver, off-main wiring; 192 tests (+8) |
 | 3 | Home cards → live provider picker + engine status | ✅ DONE | both popovers verified live (all health dots green); Codex re-audit 5 findings fixed |
-| 4 | Final UI/UX polish + edge-case hardening | ▶ audit pending | review workflow → 34 findings ALL fixed (silent-failure error states, numbered lists, off-main backup/dup-delete, friendly dates); 192 tests; friendly-date + provider-card verified live; Codex audit running |
-| 5 | Big Codex audit sweep + remediate | ☐ | — |
+| 4 | Final UI/UX polish + edge-case hardening | ✅ DONE | review workflow → 34 findings fixed; Codex audit → 8 more fixed (retry dup/wrong-turn, DateFormatter race, typed summary outcome); 192 tests; verified live |
+| 5 | Big Codex audit sweep + remediate | ▶ in progress | — |
 | 6 | Install to /Applications + Desktop + icon | ☐ | — |
 | 7 | Private GitHub repo (cryptoxinu) + README + push/merge | ☐ | — |
 

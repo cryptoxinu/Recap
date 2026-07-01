@@ -583,8 +583,10 @@ public final class Store: @unchecked Sendable {
                 """
             var args: [(any DatabaseValueConvertible)?] = [terms]
             if let ids = candidateChunkIDs {
-                sql += " AND f.chunk_id IN (\(ids.map { _ in "?" }.joined(separator: ",")))"
-                args.append(contentsOf: ids)
+                // Pass the candidate set as ONE json array param (json_each) instead of N bound params — a
+                // large date-range would otherwise exceed SQLite's bound-parameter limit and fail (audit MED).
+                sql += " AND f.chunk_id IN (SELECT value FROM json_each(?))"
+                args.append(Self.jsonArray(ids))
             }
             sql += " ORDER BY score LIMIT ?"
             args.append(limit)
@@ -594,6 +596,13 @@ public final class Store: @unchecked Sendable {
                          speaker: r["speaker"], text: r["text"], bm25: r["score"] ?? 0)
             }
         }
+    }
+
+    /// Encode a string list as a JSON array for `json_each(?)` IN-clauses — one bound param regardless of
+    /// list size, so a large candidate set never hits SQLite's bound-parameter limit.
+    static func jsonArray(_ items: [String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: items) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
     }
 
     // MARK: - vector lane (embeddings as BLOBs; V1 brute-force cosine, §0 D5/D6)
@@ -617,10 +626,10 @@ public final class Store: @unchecked Sendable {
         return try dbQueue.read { db in
             let rows: [Row]
             if let ids = chunkIDs {        // non-empty (guarded above)
-                let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+                // json_each so a large candidate set can't exceed SQLite's bound-parameter limit (audit MED).
                 rows = try Row.fetchAll(db, sql:
-                    "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ? AND chunk_id IN (\(placeholders))",
-                    arguments: StatementArguments([space] + ids))
+                    "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ? AND chunk_id IN (SELECT value FROM json_each(?))",
+                    arguments: [space, Self.jsonArray(ids)])
             } else {
                 rows = try Row.fetchAll(db, sql:
                     "SELECT chunk_id, dim, vector FROM embeddings WHERE space = ?", arguments: [space])

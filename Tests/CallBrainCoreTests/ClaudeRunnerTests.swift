@@ -99,4 +99,18 @@ struct ClaudeRunnerTests {
         #expect(!c.text.isEmpty)
         #expect(c.provider == .claude)
     }
+
+    @Test("Subprocess.isSecretEnvKey strips credential-bearing env vars, keeps benign ones (audit MED)")
+    func secretEnvScrub() {
+        // Credentials + provider-redirect vars must NOT reach the spawned CLI.
+        for k in ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN",
+                  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+                  "SOME_SERVICE_SECRET", "DB_PASSWORD"] {
+            #expect(Subprocess.isSecretEnvKey(k), "expected \(k) to be scrubbed")
+        }
+        // Vars the CLI legitimately needs must pass through.
+        for k in ["PATH", "HOME", "USER", "LANG", "TMPDIR", "CODEX_HOME", "SHELL", "TERM"] {
+            #expect(!Subprocess.isSecretEnvKey(k), "expected \(k) to be kept")
+        }
+    }
 }

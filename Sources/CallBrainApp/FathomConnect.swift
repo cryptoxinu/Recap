@@ -113,16 +113,20 @@ final class FathomConnect {
         }.value
         guard ok else { status = "Couldn't save the key to your Keychain — try again."; return }
         status = "Checking your Fathom key…"
+        let gen = connGen   // if the user hits Disconnect during the validating fetch, don't re-enable (audit LOW)
         do {
             _ = try await client.fetch(since: nil, startCursor: nil, maxPages: 1, pageSize: 1)   // validates
+            guard connGen == gen else { return }     // a disconnect raced the validation → honor it
             setConnected(true)
             status = "Connected — importing your Fathom calls…"
             startAutoSync()
             await syncNow()
         } catch FathomError.unauthorized {
+            guard connGen == gen else { return }
             await Task.detached { store.clear() }.value; setConnected(false)
             status = "That API key was rejected. Generate one at fathom.video → Settings → Integrations → API."
         } catch {
+            guard connGen == gen else { return }
             setConnected(true); startAutoSync()      // key saved; transient network error → auto-sync retries
             status = "Saved — couldn't reach Fathom just now; it'll retry automatically."
         }

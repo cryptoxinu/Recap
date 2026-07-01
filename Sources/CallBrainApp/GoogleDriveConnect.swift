@@ -252,6 +252,7 @@ final class GoogleDriveConnect {
             status = "Enter your Google OAuth client first."; return
         }
         let server = LoopbackServer()
+        let gen = syncGeneration   // if the user hits Disconnect during the OAuth flow, don't re-enable (audit LOW)
         do {
             let verifier = GoogleOAuth.makeCodeVerifier()
             let challenge = GoogleOAuth.codeChallenge(for: verifier)
@@ -286,6 +287,7 @@ final class GoogleDriveConnect {
             guard gotState == state else { status = "Sign-in failed (state mismatch)."; server.cancel(); return }
             try await client.connect(code: code, codeVerifier: verifier, redirectURI: redirect,
                                      clientID: cfg.clientID, clientSecret: cfg.clientSecret)
+            guard gen == syncGeneration else { return }   // a disconnect raced the OAuth flow → honor it
             setConnected(true)
             status = "Connected to Google Drive."
             await detectMeetRecordings()
