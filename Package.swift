@@ -1,0 +1,96 @@
+// swift-tools-version: 6.0
+import PackageDescription
+
+// CallBrain core engine as a headless, testable SwiftPM library.
+// The macOS SwiftUI app target (signing, entitlements, app bundle) is added in an
+// Xcode project later (Phase 1 UI); all logic lives here so it can `swift build` +
+// `swift test` from the CLI with no Xcode/UI ceremony.
+//
+// Platform floor is .macOS(.v15) — the calendar v3 week grid uses ScrollPosition (15+);
+// the founder's machine runs macOS 26. External deps (GRDB, WhisperKit,
+// FluidAudio, swift-embeddings, swift-subprocess, Sparkle) are added per-phase in
+// docs/PHASE-PLAN.md so each addition is independently auditable.
+let package = Package(
+    name: "CallBrain",
+    platforms: [.macOS(.v15)],
+    products: [
+        .library(name: "CallBrainCore", targets: ["CallBrainCore"]),
+        .executable(name: "CallBrainApp", targets: ["CallBrainApp"]),
+    ],
+    dependencies: [
+        // SQLite (WAL + FTS5) source of truth. sqlite-vec/usearch graduate later; the V1 vector
+        // lane stores embeddings as BLOBs and does exact brute-force cosine in Swift (docs §0 D5/D6).
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        // Native Swift ZIP reading for .docx (Google Meet "Notes by Gemini") — replaces the python extract.
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0"),
+        // On-device transcription (Phase 3): WhisperKit (CoreML Whisper) + FluidAudio (diarization).
+        // Used only by the app target's adapters; CallBrainCore stays pure (protocols only).
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.0"),
+        // Real markdown for answers (perfection Phase 4, D-dep approved): tables, fenced code,
+        // nested lists, task lists — replaces the bespoke ~90-line parser that rendered ###
+        // headings SMALLER than body text (audit CONFIRMED).
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.0"),
+    ],
+    targets: [
+        .target(
+            name: "CallBrainCore",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "CallBrainAppCore",   // app-layer state machines, extracted & TESTED (enabler E2, chat slice)
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "CallBrainTranscribe",   // on-device transcription adapters (WhisperKit + FluidAudio)
+            dependencies: [
+                "CallBrainCore",
+                .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "CallBrainApp",
+            dependencies: ["CallBrainCore", "CallBrainAppCore", "CallBrainTranscribe",
+                           .product(name: "MarkdownUI", package: "swift-markdown-ui")],
+            resources: [.copy("Resources/AppIcon.png")],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "cbtranscribe",   // dev tool: transcribe a video into a store (Phase 3 live verify)
+            dependencies: ["CallBrainCore", "CallBrainTranscribe"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "cbseed",   // dev tool: ingest a file into a store path (for populating the app to verify UI)
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "cbpairhost",   // Chrome Native Messaging host: hands the loopback token to the extension (Phase 4)
+            dependencies: ["CallBrainAppCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .executableTarget(
+            name: "cbeval",   // dev tool: retrieval-quality gold-set eval (perfection plan Phase 0)
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "CallBrainCoreTests",
+            dependencies: ["CallBrainCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "CallBrainAppCoreTests",
+            dependencies: ["CallBrainAppCore"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+    ]
+)

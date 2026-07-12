@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="sidepanel.css" />
+  <title>Recap</title>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="brand-logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 12a8 8 0 0 1 8-8"></path><path d="M12 20a8 8 0 0 0 8-8"></path>
+          <circle cx="12" cy="12" r="2.3" fill="currentColor" stroke="none"></circle>
+        </svg>
+      </span>
+      <span class="brand-name">Recap</span>
+    </div>
+    <div id="status" class="status" title="Connection status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- Not-paired state -->
+  <section id="pairCard" class="pair-card" hidden>
+    <div id="pairOrb" class="orb state-idle">
+      <span class="orb-core"></span><span class="orb-ring"></span>
+      <svg class="orb-check" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+    </div>
+    <p class="pair-title">Connect to your Mac app</p>
+    <p id="pairStatus" class="pair-body">One click links this panel to Recap so it can read the call, record, and answer — all on your Mac.</p>
+    <button id="pairBtn" class="btn-primary"><span class="btn-label">Pair with Recap</span></button>
+    <button id="openOptions" class="link-quiet">More pairing options</button>
+  </section>
+
+  <!-- Main assistant -->
+  <main id="main" class="main" hidden>
+    <button id="recordBtn" class="record-btn">
+      <span class="rec-ico" aria-hidden="true"></span>
+      <span class="rec-label">Record this call</span>
+      <span id="recordState" class="rec-state">Not recording</span>
+    </button>
+
+    <div class="quick">
+      <button id="recapBtn" class="chip chip-primary">
+        <span class="chip-ico">↺</span> What did they just say?
+      </button>
+      <button id="askNextBtn" class="chip">💡 What should I ask?</button>
+    </div>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+
+    <div id="hint" class="hint">
+      <span class="hint-spark">✦</span>
+      <p>Ask anything about this call — I’m reading the live captions.</p>
+    </div>
+
+    <p id="captionsWarn" class="captions-warn" hidden>
+      <span>⚠︎</span> Turn on captions in Meet (CC) so I can hear the call.
+    </p>
+
+    <div class="composer">
+      <input id="input" class="composer-input" type="text"
+             placeholder="Ask about this call…" autocomplete="off" />
+      <button id="sendBtn" class="composer-send" title="Send" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>
+      </button>
+    </div>
+
+    <button id="saveBtn" class="save-link">Save this call to Recap</button>
+  </main>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

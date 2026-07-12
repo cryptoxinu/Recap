@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Recap</string>
+  <key>CFBundleDisplayName</key><string>Recap</string>
+  <key>CFBundleIdentifier</key><string>com.callbrain.app</string>
+  <key>CFBundleExecutable</key><string>Recap</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <!-- Task 9.2: calendar prep briefs — read-only event access, asked lazily from the Home chip -->
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Recap reads today's meetings to prep you: who you're meeting and what was said last time. Events never leave your Mac.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Recap records your meetings so it can transcribe and summarize them on-device. Audio never leaves your Mac.</string>
+  <!-- Deep link so the Chrome extension can launch/focus the app + trigger one-click pairing -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>com.callbrain.app.pair</string>
+      <key>CFBundleURLSchemes</key>
+      <array><string>callbrain</string></array>
+    </dict>
+  </array>
+  <!-- Sparkle auto-update (fill in once hosting + EdDSA key exist) -->
+  <key>SUFeedURL</key><string>https://REPLACE_HOST/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>REPLACE_SPARKLE_ED_PUBLIC_KEY</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+</dict>
+</plist>

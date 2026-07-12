@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CallBrain call-corpus sync LaunchAgent — REFERENCE COPY.
+  The app writes this to ~/Library/LaunchAgents/com.callbrain.corpus-sync.plist with an ABSOLUTE script
+  path + the actual corpus folder paths when you enable corpus export in Settings. For a manual install,
+  replace __HOME__ with your home directory and the corpus paths if you chose a custom folder, then:
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.callbrain.corpus-sync.plist
+  Not KeepAlive — this is a short one-shot; WatchPaths fires it seconds after a new/updated call lands,
+  with a 5-minute StartInterval safety net.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.callbrain.corpus-sync</string>
+  <key>ProgramArguments</key>
+  <array><string>__HOME__/bin/callbrain-corpus-sync.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>WatchPaths</key>
+  <array>
+    <string>__HOME__/Library/Application Support/CallBrain/corpus</string>
+    <string>__HOME__/Library/Application Support/CallBrain/corpus/calls</string>
+  </array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>/tmp/callbrain-corpus-sync.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/callbrain-corpus-sync.err.log</string>
+</dict>
+</plist>

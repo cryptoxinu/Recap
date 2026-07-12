@@ -1,0 +1,6 @@
+{"type":"session.started","session_id":"fixture"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"reasoning","text":"thinking"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"Hello"}}
+{"type":"item.completed","item":{"type":"agent_message","text":" world"}}
+{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}

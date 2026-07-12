@@ -1,0 +1,146 @@
+[
+ {
+  "question": "what was the issue BitRouter claimed about reasoning",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "claimed by BitRouter around reasoning",
+  "dateScope": null
+ },
+ {
+  "question": "what did Priya say about miner profit share requests",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "profit share for April and May",
+  "dateScope": null
+ },
+ {
+  "question": "what did we say about the processors in wearables like Fitbit and Whoop",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "really weak processors",
+  "dateScope": null
+ },
+ {
+  "question": "how does Further Health aggregate stats compared to other wearables",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "designed in Further Health actually",
+  "dateScope": null
+ },
+ {
+  "question": "is GLM5.2 limited by its context window",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "for GLM5.2, just so I can understand",
+  "dateScope": null
+ },
+ {
+  "question": "how can businesses prove their context ran through the system",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "ran that context through the system",
+  "dateScope": null
+ },
+ {
+  "question": "what actually happened to customers during the gateway failure",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "gotten a 429",
+  "dateScope": null
+ },
+ {
+  "question": "what did the demo show about time to first token",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "time to first token and the calculate",
+  "dateScope": null
+ },
+ {
+  "question": "who is Nadia and where is he based",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "I'm Nadia",
+  "dateScope": null
+ },
+ {
+  "question": "what is Chris's professional background",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "Enterprise Platform and Cloud and Security Architect",
+  "dateScope": null
+ },
+ {
+  "question": "how were miner payouts scaled by their bids",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "scaled by your bid",
+  "dateScope": null
+ },
+ {
+  "question": "how did we de-risk the miner economics with deals",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "rev share with folks",
+  "dateScope": null
+ },
+ {
+  "question": "what was decided about auditing the distributed router",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "get that audited",
+  "dateScope": null
+ },
+ {
+  "question": "why were people worried about trusting miner metrics",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "we can't trust minor metrics",
+  "dateScope": null
+ },
+ {
+  "question": "how are requests routed when nothing is cached",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "balance those requests evenly",
+  "dateScope": null
+ },
+ {
+  "question": "what did Dom say about the price router adapting to miner load",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "price router could adapt to the load",
+  "dateScope": null
+ },
+ {
+  "question": "why was someone nervous about the nightly deploy",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "it is a nightly",
+  "dateScope": null
+ },
+ {
+  "question": "what was the update on the miner signup flow",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "updated the minor sign up. It's really real",
+  "dateScope": null
+ },
+ {
+  "question": "what serving config were people told to use for the demo",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "use whatever work last week",
+  "dateScope": null
+ },
+ {
+  "question": "what does the Flux demo cover about routing decisions",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "goes over Flux",
+  "dateScope": null
+ },
+ {
+  "question": "what did Priya say about profit share in the impromptu call",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "profit share for April and May",
+  "dateScope": "2026-06-30..2026-07-01"
+ },
+ {
+  "question": "what was said about wearable sensors versus their processors",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "sensors are literally immaculate",
+  "dateScope": "2026-06-30..2026-07-01"
+ },
+ {
+  "question": "how much Kimmy 2.7 traffic does Ambient handle on OpenRouter",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "50% of the traffic for the Kimmy 2.7",
+  "dateScope": "2026-06-25..2026-06-26"
+ },
+ {
+  "question": "what did the Riley quick sync cover",
+  "expectMeetingTitleContains": null,
+  "expectTextContains": "referral incentives, enterprise partnership structures",
+  "dateScope": "2026-06-25..2026-06-26"
+ }
+]

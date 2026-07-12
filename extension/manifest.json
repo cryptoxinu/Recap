@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Recap for Meet",
+  "version": "0.1.1",
+  "description": "Captures Google Meet live captions and sends them to the Recap Mac app.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2UAhVa4cEVcLcgY2yFXeEZmo/hZSE3bJlVX8ldbR50XvHTNzcjV030DKwMadXaErPjijy6mVCKJkmcgH+NXK1Y6Az0MmL7ZVkG304JQTxBZ9x41NG9WpSjRN7ZhdzqlcB4gPajcS0UcZOALrTo5uNNwdvbRWA79VGbiEBT6wcpXtVEGfwnkyCwcNn92bqH4dmY4pnt+ManLz6DXV2d8UJsFx61bxaQdjzRN0iraZAIa68W1gSe9Anxf7VwOVix53I8T2CVoxEQgSsiSWac9LC03u93wCXy1cWEIc7/bjHBzD3aJX+bF9RQ5uLgR70piKoIe+jAHR70tRtrkVD/x3JQIDAQAB",
+  "permissions": ["storage", "sidePanel", "nativeMessaging"],
+  "host_permissions": ["https://meet.google.com/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "Recap"
+  },
+  "options_page": "options.html"
+}

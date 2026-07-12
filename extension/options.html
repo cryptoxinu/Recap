@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recap — Pairing</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <div class="card">
+    <div class="brandline">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 12a8 8 0 0 1 8-8"></path><path d="M12 20a8 8 0 0 0 8-8"></path>
+          <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"></circle>
+        </svg>
+      </span>
+      <span class="brandname">Recap</span>
+    </div>
+
+    <h1>Pair with your Mac app</h1>
+    <p class="sub">One click connects this extension to the Recap app so your Google Meet calls are captured, recorded, and answered — all on your Mac.</p>
+
+    <div class="stage">
+      <div id="orb" class="orb state-idle">
+        <span class="orb-core"></span>
+        <span class="orb-ring"></span>
+        <svg class="orb-check" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+      </div>
+      <p id="statusLine" class="status-line">Ready to pair</p>
+    </div>
+
+    <button id="pair" class="btn-primary">
+      <span class="btn-label">Pair with Recap</span>
+    </button>
+
+    <p id="hint" class="hint">If the app isn’t open, this will launch it for you.</p>
+
+    <details class="manual">
+      <summary>Having trouble? Pair manually</summary>
+      <div class="manual-body">
+        <label for="token">Pairing token</label>
+        <input id="token" type="text" placeholder="Recap → Settings → Browser extension → Pair manually" autocomplete="off" spellcheck="false" />
+        <label for="port">Port</label>
+        <input id="port" type="number" value="8422" min="1" max="65535" />
+        <div class="manual-actions">
+          <button id="save" class="btn-ghost">Save</button>
+          <button id="test" class="btn-ghost">Test connection</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
