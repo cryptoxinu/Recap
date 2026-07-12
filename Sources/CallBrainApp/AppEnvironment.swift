@@ -1366,16 +1366,50 @@ final class AppEnvironment {
     struct ReconcileSummary: Sendable { let reworded: Int; let completed: Int; let deduped: Int; let added: Int
         var coveredAllCalls = true }   // false when the corpus exceeded the batch cap (reviewed most-recent N)
 
+    /// Live progress for a Tidy run (Part 2, 2026-07-11) — a determinate bar instead of a blank spinner.
+    struct TidyProgress: Sendable, Equatable { var phase: String; var done: Int; var total: Int }
+    var tidyProgress: TidyProgress?
+
+    /// Everything a Tidy run CHANGED, so it can be fully reverted (Part 3 — true cancel/undo). Tidy never
+    /// hard-deletes, so every change is reversible: restore reworded text/owner, reopen completed/deduped,
+    /// delete additions.
+    struct TidyUndo: Sendable {
+        var reworded: [(id: String, text: String, owner: String?)] = []   // prior text/owner to restore
+        var reopened: [String] = []                                       // ids to set back to .open
+        var added: [String] = []                                          // new ids to delete
+        var isEmpty: Bool { reworded.isEmpty && reopened.isEmpty && added.isEmpty }
+    }
+    var lastTidyUndo: TidyUndo?
+
+    /// Tidy outcome — a SPECIFIC failure reason instead of the old silent nil (Part 1). `.cancelled` = the
+    /// user hit Cancel; nothing was applied (or it's being undone).
+    enum ReconcileOutcome: Sendable { case ok(ReconcileSummary); case failed(String); case cancelled }
+
+    /// Map the underlying LLMError to a founder-facing, actionable line — never the blind "Couldn't reach
+    /// the AI" (root cause 2026-07-11 was a rate-limit hidden behind that generic banner).
+    static func tidyErrorMessage(_ error: Error) -> String {
+        let s = String(describing: error).lowercased()
+        if s.contains("ratelimit") { return "Claude is rate-limited right now — wait a few minutes and try Tidy again." }
+        if s.contains("timedout") || s.contains("timeout") { return "The AI took too long on this batch — try again." }
+        if s.contains("notinstalled") { return "The Claude/Codex CLI isn't set up — connect it in Settings, then try again." }
+        if s.contains("decodefailed") { return "The AI's response couldn't be read — try again." }
+        if s.contains("allprovidersfailed") { return "Couldn't reach the AI (it may be rate-limited) — try again shortly." }
+        return "Couldn't tidy right now — try again."
+    }
+
     /// "Tidy with AI" — reconcile the whole task list against every call: reword for clarity, mark ones the
     /// calls show are done, merge duplicates, add missed tasks. Safe: completion/dedup mark Done
-    /// (reversible), additions are FK-checked to a real call, nothing is hard-deleted.
-    func reconcileTasks() async -> ReconcileSummary? {
-        guard !isLocalOnly else { return nil }   // F1: Tidy sends transcripts to the cloud — disabled in local-only
+    /// (reversible), additions are FK-checked to a real call, nothing is hard-deleted. Cancellable (checks
+    /// `Task.isCancelled` between batches) and records a `lastTidyUndo` so the whole run can be reverted.
+    func reconcileTasks() async -> ReconcileOutcome {
+        guard !isLocalOnly else { return .failed("Tidy uses cloud AI — turn off Local-only mode in Settings.") }
         let store = self.store
         let founder = FounderIdentity.displayName
-        // Build the task context + per-call evidence OFF the main thread. Reads OPEN tasks (to tidy) AND DONE
-        // tasks (so Tidy never re-surfaces something already handled), and batches EVERY call's utterances
-        // into ~13k-char chunks so it examines the whole corpus, not just the first 20 (founder 2026-07-01).
+        lastTidyUndo = nil   // each run starts fresh; only a successful apply re-arms Undo
+        tidyProgress = TidyProgress(phase: "Reading your tasks…", done: 0, total: 1)
+        // Build the task context + per-call evidence OFF the main thread. Evidence batches are LARGER now
+        // (~26k) so there are fewer AI calls — each call re-sends the task list, so fewer calls = far fewer
+        // tokens = no rate-limit (root cause 2026-07-11: ~32k-token calls ×8-24 rate-limited the account).
         let prep = await Task.detached { () -> (open: [TaskIntelligence.TaskContext], resolved: [TaskIntelligence.TaskContext], batches: [String], openIDs: Set<String>, validIDs: Set<String>, existingTexts: [String]) in
             let openRows = (try? store.tasks(status: .open)) ?? []
             let doneRows = (try? store.tasks(status: .done)) ?? []
@@ -1388,85 +1422,117 @@ final class AppEnvironment {
                 let utts = (try? store.utterances(meetingID: m.id)) ?? []
                 let body = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
                 let block = "## CALL meetingID=\(m.id) — \(m.displayTitle) (\(m.date))\n" + String(body.prefix(2500)) + "\n\n"
-                if !cur.isEmpty, cur.count + block.count > 13000 { batches.append(cur); cur = "" }
+                // Large batches → usually ONE AI call for the whole corpus. Each call re-sends the (big) task
+                // list, so FEWER calls = far fewer tokens = no rate-limit (the confirmed root cause was ~8-24
+                // calls each re-sending 500+ tasks). One pass also tidies BETTER (sees all evidence at once).
+                if !cur.isEmpty, cur.count + block.count > 110_000 { batches.append(cur); cur = "" }
                 cur += block
             }
             if !cur.isEmpty { batches.append(cur) }
             return (ctx(openRows), ctx(doneRows), batches, Set(openRows.map(\.item.id)),
                     Set(meetings.map(\.id)), openRows.map(\.item.text) + doneRows.map(\.item.text))
         }.value
-        guard !prep.batches.isEmpty || !prep.open.isEmpty else { return nil }
+        guard !prep.batches.isEmpty || !prep.open.isEmpty else { tidyProgress = nil; return .ok(ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0)) }
 
-        // Reconcile each batch (each pass sees the FULL open + resolved lists). Batches are most-recent-
-        // first (recentMeetings is date-DESC), so the cap always covers the MOST RELEVANT recent calls.
-        // Capped to bound cost/latency on a huge corpus — but NEVER silently: if the corpus exceeds the cap
-        // we log it and tell the founder Tidy reviewed the most-recent N (no silent truncation). Ongoing
-        // scale is handled incrementally + free by the per-call auto-complete on ingest (completeMatchingTasks).
         let maxBatches = 24
         let coveredAllCalls = prep.batches.count <= maxBatches
+        let total = min(prep.batches.count, maxBatches)
+        let tlog = Logger(subsystem: "com.callbrain", category: "tasks")
         if !coveredAllCalls {
-            Logger(subsystem: "com.callbrain", category: "tasks")
-                .notice("Tidy: corpus is \(prep.batches.count, privacy: .public) batches; reviewing the \(maxBatches, privacy: .public) most-recent (per-call auto-complete keeps the rest current).")
+            tlog.notice("Tidy: corpus is \(prep.batches.count, privacy: .public) batches; reviewing the \(maxBatches, privacy: .public) most-recent.")
         }
+        // Cap the RESOLVED list sent in the prompt — it's belt-and-suspenders (the apply-time dedup guard
+        // already blocks re-adding done tasks), and sending all 200+ done tasks every batch is what bloated
+        // the prompt to ~32k tokens/call and rate-limited the account (confirmed root cause 2026-07-11).
+        let resolvedForPrompt = Array(prep.resolved.prefix(25))
         let ti = TaskIntelligence(llm: router)
         var reword: [TaskIntelligence.Plan.Reword] = []; var complete = Set<String>()
         var duplicates = Set<String>(); var adds: [TaskIntelligence.Plan.New] = []
         for (i, batch) in prep.batches.prefix(maxBatches).enumerated() {
-            guard let plan = await ti.reconcile(tasks: prep.open, resolved: prep.resolved, evidence: batch, founder: founder) else {
-                // If we can't even reach the AI on the FIRST batch, stop — don't spawn N more doomed
-                // per-batch calls (each up to the reconcile timeout, ×2 on provider fallback). That
-                // cascade was the "Tidy bogs down / hangs". A nil after some successes is just one skipped
-                // batch. Returning nil surfaces "Couldn't reach the AI to tidy tasks — try again."
-                if i == 0 { return nil }
+            if Task.isCancelled { tidyProgress = nil; return .cancelled }
+            tidyProgress = TidyProgress(phase: "Reviewing your calls…", done: i, total: total)
+            do {
+                // 150s (not 75s) so the big structured-output call has real headroom on a cold start.
+                // evidenceLimit matches the batch size so a big single-call batch isn't silently truncated.
+                let plan = try await ti.reconcileThrowing(tasks: prep.open, resolved: resolvedForPrompt,
+                                                          evidence: batch, founder: founder,
+                                                          evidenceLimit: 120_000, timeout: 150)
+                guard let plan else { if i == 0 { tidyProgress = nil; return .failed("The AI returned nothing — try again.") }; continue }
+                reword.append(contentsOf: plan.reword); complete.formUnion(plan.complete)
+                duplicates.formUnion(plan.duplicates); adds.append(contentsOf: plan.add)
+            } catch {
+                if Task.isCancelled { tidyProgress = nil; return .cancelled }
+                tlog.error("Tidy batch \(i, privacy: .public) failed (\(batch.count, privacy: .public) evidence chars, \(prep.open.count, privacy: .public) open tasks): \(String(describing: error), privacy: .public)")
+                // First-batch failure fails the whole run with the REAL reason; a later-batch failure is
+                // just one skipped batch (don't fire N more doomed calls).
+                if i == 0 { tidyProgress = nil; return .failed(Self.tidyErrorMessage(error)) }
                 continue
             }
-            reword.append(contentsOf: plan.reword); complete.formUnion(plan.complete)
-            duplicates.formUnion(plan.duplicates); adds.append(contentsOf: plan.add)
         }
+        if Task.isCancelled { tidyProgress = nil; return .cancelled }
         guard !reword.isEmpty || !complete.isEmpty || !duplicates.isEmpty || !adds.isEmpty else {
-            return ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0, coveredAllCalls: coveredAllCalls)
+            tidyProgress = nil; lastTidyUndo = nil
+            return .ok(ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0, coveredAllCalls: coveredAllCalls))
         }
 
-        // Apply the merged plan OFF the main thread. The dedup GUARD is what actually prevents a DONE task
-        // from being re-added, even if the model slips past the prompt rule (founder: "no rehighlighting old
-        // shit I already did").
+        tidyProgress = TidyProgress(phase: "Applying changes…", done: total, total: total)
+        // Apply the merged plan OFF the main thread, RECORDING an undo log so the run is fully reversible.
         let openIDs = prep.openIDs, validIDs = prep.validIDs, initialTexts = prep.existingTexts
+        let openMap = Dictionary(prep.open.map { ($0.id, (text: $0.text, owner: $0.owner)) }, uniquingKeysWith: { a, _ in a })
         let finalReword = reword, finalComplete = complete, finalDuplicates = duplicates, finalAdds = adds
-        let result = await Task.detached { () -> ReconcileSummary in
+        let (result, undo) = await Task.detached { () -> (ReconcileSummary, TidyUndo) in
             var rew = 0, comp = 0, dedup = 0, added = 0
             var existingTexts = initialTexts, rewordedIDs = Set<String>()
+            var undo = TidyUndo()
             func clean(_ s: String?, max: Int) -> String? {
                 guard let s else { return nil }
                 let t = s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 return t.isEmpty ? nil : String(t.prefix(max))
             }
-            // Count ONLY writes that actually succeeded — the counters used to increment even when
-            // the DB write threw or changed zero rows, so the UI reported a tidy that didn't happen
-            // (audit B2).
             for u in finalReword where openIDs.contains(u.id) && !rewordedIDs.contains(u.id) {
                 guard let text = clean(u.text, max: 280) else { continue }
+                let prior = openMap[u.id]
                 if (try? store.updateTaskText(id: u.id, text: text, owner: clean(u.owner, max: 80))) != nil {
                     rew += 1; rewordedIDs.insert(u.id)
+                    undo.reworded.append((id: u.id, text: prior?.text ?? "", owner: prior?.owner))
                 }
             }
             for id in finalComplete where openIDs.contains(id) {
-                if (try? store.setTaskStatus(id: id, .done)) == true { comp += 1 }
+                if (try? store.setTaskStatus(id: id, .done)) == true { comp += 1; undo.reopened.append(id) }
             }
             for id in finalDuplicates where openIDs.contains(id) {
-                if (try? store.setTaskStatus(id: id, .done)) == true { dedup += 1 }
+                if (try? store.setTaskStatus(id: id, .done)) == true { dedup += 1; undo.reopened.append(id) }
             }
             for n in finalAdds where validIDs.contains(n.meetingID) {
                 guard let text = clean(n.text, max: 280) else { continue }
-                if TaskIntelligence.isNearDuplicate(text, of: existingTexts) { continue }   // 5c: never resurface
-                if (try? store.addReconciledTask(meetingID: n.meetingID, owner: clean(n.owner, max: 80), text: text)) == true {
-                    added += 1; existingTexts.append(text)                                  // so a later batch can't re-add it
+                if TaskIntelligence.isNearDuplicate(text, of: existingTexts) { continue }   // never resurface
+                if let newID = (try? store.addReconciledTask(meetingID: n.meetingID, owner: clean(n.owner, max: 80), text: text)) ?? nil {
+                    added += 1; existingTexts.append(text); undo.added.append(newID)
                 }
             }
-            return ReconcileSummary(reworded: rew, completed: comp, deduped: dedup, added: added, coveredAllCalls: coveredAllCalls)
+            return (ReconcileSummary(reworded: rew, completed: comp, deduped: dedup, added: added, coveredAllCalls: coveredAllCalls), undo)
         }.value
+        lastTidyUndo = undo.isEmpty ? nil : undo
+        tidyProgress = nil
+        titlesRevision &+= 1
         refreshReminders()
-        return result
+        return .ok(result)
+    }
+
+    /// Undo the last Tidy run — put every task back exactly as it was (Part 3). Restores reworded text/owner,
+    /// reopens completed/deduped tasks, deletes additions. Safe because Tidy never hard-deletes.
+    func undoTidy() async {
+        guard let undo = lastTidyUndo else { return }
+        lastTidyUndo = nil
+        let store = self.store
+        await Task.detached {
+            for r in undo.reworded { try? store.updateTaskText(id: r.id, text: r.text, owner: r.owner) }
+            for id in undo.reopened { try? store.setTaskStatus(id: id, .open) }
+            if !undo.added.isEmpty { try? store.deleteTasks(ids: undo.added) }
+        }.value
+        titlesRevision &+= 1
+        refreshReminders()
     }
 
     /// Delete a call and everything derived from it (chunks/embeddings/utterances/entities/tasks +

@@ -615,8 +615,10 @@ public final class Store: @unchecked Sendable {
 
     /// Add a task the AI reconciliation surfaced from a call (attributed to that meeting; FK-checked by the
     /// caller). `INSERT OR IGNORE` on the (meeting_id, dedupe_key) UNIQUE avoids re-adding the same one.
+    /// Returns the NEW task id when a row was actually inserted (nil if the dedupe UNIQUE swallowed it) —
+    /// so a caller (Tidy) can record it for a clean undo.
     @discardableResult
-    public func addReconciledTask(meetingID: String, owner: String?, text: String) throws -> Bool {
+    public func addReconciledTask(meetingID: String, owner: String?, text: String) throws -> String? {
         let id = "task_" + UUID().uuidString
         // Dedupe on owner + full text (SME LOW — two distinct tasks with different owners or the same first
         // 120 chars must not collide on the (meeting_id, dedupe_key) UNIQUE).
@@ -626,7 +628,7 @@ public final class Store: @unchecked Sendable {
                 INSERT OR IGNORE INTO tasks (id, meeting_id, owner, text, status, dedupe_key, created_at)
                 VALUES (?, ?, ?, ?, 'open', ?, strftime('%s','now'))
                 """, arguments: [id, meetingID, owner, text, String(key)])
-            return db.changesCount > 0
+            return db.changesCount > 0 ? id : nil
         }
     }
 

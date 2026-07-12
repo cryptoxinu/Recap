@@ -13,6 +13,9 @@ struct TasksView: View {
     @State private var scope: Scope = .mine           // this app is only for the founder → lead with THEIR to-dos
     @State private var tidying = false
     @State private var tidySummary: String?
+    @State private var tidyTask: Task<Void, Never>?     // the in-flight Tidy run (Cancel calls .cancel())
+    @State private var cancelRequested = false          // Cancel pressed → revert anything applied
+    @State private var tidyFailed = false               // last summary was an error (banner icon/colour)
     @State private var reviewingAI = false   // "Have AI review" in-flight
     /// Name/task filter (Phase 2) — folded into `regroup()` so it's cached, never a per-body filter.
     @State private var query = ""
@@ -77,13 +80,41 @@ struct TasksView: View {
                 if !env.taskCompletionReviews.isEmpty {
                     completionReviewBanner.transition(.move(edge: .top).combined(with: .opacity))
                 }
-                if let s = tidySummary {
-                    Label(s, systemImage: "checkmark.seal.fill")
-                        .font(.cbCallout).foregroundStyle(Theme.accent)
-                        .padding(Space.m)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous).fill(Theme.accentSoft))
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                // Live progress while Tidy runs — determinate bar + a real Cancel (Part 2/3, 2026-07-11).
+                if tidying, let p = env.tidyProgress {
+                    HStack(alignment: .center, spacing: Space.m) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Tidying with AI — \(p.phase)").font(.cbCallout).foregroundStyle(Theme.textPrimary)
+                            if p.total > 1 {
+                                ProgressView(value: Double(min(p.done, p.total)), total: Double(p.total)).tint(Theme.accent)
+                                Text("Reviewed \(p.done) of \(p.total) call\(p.total == 1 ? "" : "s")")
+                                    .font(.cbCaption).foregroundStyle(Theme.textSecondary)
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                        Button("Cancel", role: .cancel) { cancelTidy() }.buttonStyle(.bordered)
+                    }
+                    .padding(Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous).fill(Theme.accentSoft))
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                if let s = tidySummary, !tidying {
+                    HStack(alignment: .center, spacing: Space.s) {
+                        Label(s, systemImage: tidyFailed ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                            .font(.cbCallout).foregroundStyle(tidyFailed ? Theme.danger : Theme.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // One-tap full revert of the last Tidy (Part 3): "in case I didn't want to run it."
+                        if !tidyFailed, env.lastTidyUndo != nil {
+                            Button { undoLastTidy() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
+                                .buttonStyle(.bordered)
+                        }
+                    }
+                    .padding(Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous).fill(tidyFailed ? Theme.danger.opacity(0.10) : Theme.accentSoft))
+                    .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 if groupedRows.isEmpty && !didLoad {
                     HStack(spacing: Space.s) {
@@ -303,12 +334,31 @@ struct TasksView: View {
             withAnimation(Theme.springy) { tidySummary = "Tidy uses cloud AI — turn off Local-only mode in Settings to use it." }
             return
         }
-        tidying = true; tidySummary = nil
-        Task {
-            let result = await env.reconcileTasks()
-            tidying = false
+        tidying = true; tidySummary = nil; cancelRequested = false
+        tidyTask = Task {
+            let outcome = await env.reconcileTasks()
+            // If the user hit Cancel, revert anything that was applied (no-op if nothing was) and clear —
+            // a TRUE cancel, whether it landed during the AI phase (nothing applied) or the brief apply.
+            if cancelRequested {
+                cancelRequested = false
+                await env.undoTidy()
+                tidying = false; tidyTask = nil
+                load()
+                withAnimation(Theme.springy) { tidySummary = nil }
+                return
+            }
+            tidying = false; tidyTask = nil
             load()
-            if let r = result {
+            switch outcome {
+            case .cancelled:
+                tidyFailed = false
+                await env.undoTidy()   // belt-and-suspenders
+                withAnimation(Theme.springy) { tidySummary = nil }
+            case .failed(let reason):
+                tidyFailed = true
+                withAnimation(Theme.springy) { tidySummary = reason }
+            case .ok(let r):
+                tidyFailed = false
                 var msg: String
                 if r.reworded + r.completed + r.deduped + r.added == 0 {
                     msg = "Your task list is already tidy — nothing to change."
@@ -324,9 +374,22 @@ struct TasksView: View {
                 // recent calls (newer completions are already handled automatically on import).
                 if !r.coveredAllCalls { msg += " (reviewed your most recent calls)" }
                 withAnimation(Theme.springy) { tidySummary = msg }
-            } else {
-                withAnimation(Theme.springy) { tidySummary = "Couldn't reach the AI to tidy tasks — try again." }
             }
+        }
+    }
+
+    /// Cancel the in-flight Tidy — stops the AI run and undoes anything already applied (true cancel).
+    private func cancelTidy() {
+        cancelRequested = true
+        tidyTask?.cancel()
+    }
+
+    /// Undo the last completed Tidy — one tap puts every task back exactly as it was.
+    private func undoLastTidy() {
+        Task {
+            await env.undoTidy()
+            load()
+            withAnimation(Theme.springy) { tidySummary = "Undone — every task is back the way it was." }
         }
     }
 
