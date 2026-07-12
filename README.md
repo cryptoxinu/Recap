@@ -1,14 +1,6 @@
 # Recap
 
-**A private, local-first macOS meeting-intelligence app — a personal RAG over months (or years) of
-your work calls.** Capture → organize → search → **ask AI** → extract tasks, with strict citations
-(meeting · date · speaker · timestamp) and a hard no-hallucination rule: if the answer isn't in your
-calls, Recap says so instead of making it up.
-
-Think Fireflies / Fathom / Otter — but native, fast, and running on **your** machine against **your**
-data, using **your** AI CLI subscriptions instead of a metered API.
-
-> 100% native Swift (SwiftUI + Swift 6 strict concurrency). No Python in the shipped app. Apple-Silicon only.
+**A local macOS meeting intelligence app —
 
 ---
 
