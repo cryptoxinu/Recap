@@ -880,6 +880,20 @@ final class AppEnvironment {
     /// automatic CLOUD pass — summary fallback, AI title, speaker-naming, task tidy — and the corpus sync
     /// are skipped, enforcing the promise app-wide instead of only on the Ask path (audit F1 HIGH).
     var isLocalOnly: Bool { UserDefaults.standard.bool(forKey: Self.localOnlyKey) }
+
+    /// Incremental Tidy (2026-07-11): the set of call ids a successful Tidy has already reviewed, so a
+    /// re-run only sends NEW calls' evidence to the AI (or skips entirely when nothing's new) — the task
+    /// list is the fixed cost, so this keeps repeat tidies cheap. "Re-tidy everything" ignores it.
+    static let tidiedMeetingsKey = "callbrain.tidiedMeetings"
+    var tidiedMeetingIDs: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: Self.tidiedMeetingsKey) ?? [])
+    }
+    private func markTidied(_ ids: Set<String>, allKnown: Set<String>) {
+        // Union in the newly-reviewed ids, but prune any that no longer exist (deleted calls) so the set
+        // stays bounded to the live corpus.
+        let next = tidiedMeetingIDs.union(ids).intersection(allKnown)
+        UserDefaults.standard.set(Array(next), forKey: Self.tidiedMeetingsKey)
+    }
     var ask: AskEngine {
         let pref = AskEngine.DeepAnswerPreference(
             rawValue: UserDefaults.standard.string(forKey: Self.deepAnswersKey) ?? "auto") ?? .auto
@@ -1364,7 +1378,8 @@ final class AppEnvironment {
     }
 
     struct ReconcileSummary: Sendable { let reworded: Int; let completed: Int; let deduped: Int; let added: Int
-        var coveredAllCalls = true }   // false when the corpus exceeded the batch cap (reviewed most-recent N)
+        var coveredAllCalls = true    // false when the corpus exceeded the batch cap (reviewed most-recent N)
+        var nothingNew = false }      // true when a Tidy skipped because no new calls since the last one
 
     /// Live progress for a Tidy run (Part 2, 2026-07-11) — a determinate bar instead of a blank spinner.
     struct TidyProgress: Sendable, Equatable { var phase: String; var done: Int; var total: Int }
@@ -1401,38 +1416,44 @@ final class AppEnvironment {
     /// calls show are done, merge duplicates, add missed tasks. Safe: completion/dedup mark Done
     /// (reversible), additions are FK-checked to a real call, nothing is hard-deleted. Cancellable (checks
     /// `Task.isCancelled` between batches) and records a `lastTidyUndo` so the whole run can be reverted.
-    func reconcileTasks() async -> ReconcileOutcome {
+    func reconcileTasks(fullRescan: Bool = false) async -> ReconcileOutcome {
         guard !isLocalOnly else { return .failed("Tidy uses cloud AI — turn off Local-only mode in Settings.") }
         let store = self.store
         let founder = FounderIdentity.displayName
+        let alreadyTidied = fullRescan ? Set<String>() : tidiedMeetingIDs
         lastTidyUndo = nil   // each run starts fresh; only a successful apply re-arms Undo
         tidyProgress = TidyProgress(phase: "Reading your tasks…", done: 0, total: 1)
-        // Build the task context + per-call evidence OFF the main thread. Evidence batches are LARGER now
-        // (~26k) so there are fewer AI calls — each call re-sends the task list, so fewer calls = far fewer
-        // tokens = no rate-limit (root cause 2026-07-11: ~32k-token calls ×8-24 rate-limited the account).
-        let prep = await Task.detached { () -> (open: [TaskIntelligence.TaskContext], resolved: [TaskIntelligence.TaskContext], batches: [String], openIDs: Set<String>, validIDs: Set<String>, existingTexts: [String]) in
+        // Build the task context + per-call evidence OFF the main thread. INCREMENTAL: evidence comes only
+        // from calls NOT yet reviewed by a prior Tidy (unless fullRescan) — so a re-run is cheap or skips
+        // entirely. One big batch → usually ONE AI call (the task list is the fixed cost, so fewer calls =
+        // far fewer tokens = no rate-limit; root cause 2026-07-11 was ~32k-token calls ×8-24).
+        let prep = await Task.detached { () -> (open: [TaskIntelligence.TaskContext], resolved: [TaskIntelligence.TaskContext], batches: [String], openIDs: Set<String>, validIDs: Set<String>, existingTexts: [String], processed: Set<String>, allKnown: Set<String>) in
             let openRows = (try? store.tasks(status: .open)) ?? []
             let doneRows = (try? store.tasks(status: .done)) ?? []
             func ctx(_ rows: [Store.TaskRow]) -> [TaskIntelligence.TaskContext] {
                 rows.map { .init(id: $0.item.id, owner: $0.item.owner, text: $0.item.text, meeting: $0.meetingTitle) }
             }
             let meetings = (try? store.recentMeetings()) ?? []
-            var batches: [String] = []; var cur = ""
-            for m in meetings {
+            let allKnown = Set(meetings.map(\.id))
+            var batches: [String] = []; var cur = ""; var processed = Set<String>()
+            for m in meetings where !alreadyTidied.contains(m.id) {   // only NEW calls (fullRescan clears the set)
                 let utts = (try? store.utterances(meetingID: m.id)) ?? []
                 let body = utts.map { ($0.speaker.map { "\($0): " } ?? "") + $0.text }.joined(separator: "\n")
                 let block = "## CALL meetingID=\(m.id) — \(m.displayTitle) (\(m.date))\n" + String(body.prefix(2500)) + "\n\n"
-                // Large batches → usually ONE AI call for the whole corpus. Each call re-sends the (big) task
-                // list, so FEWER calls = far fewer tokens = no rate-limit (the confirmed root cause was ~8-24
-                // calls each re-sending 500+ tasks). One pass also tidies BETTER (sees all evidence at once).
                 if !cur.isEmpty, cur.count + block.count > 110_000 { batches.append(cur); cur = "" }
-                cur += block
+                cur += block; processed.insert(m.id)
             }
             if !cur.isEmpty { batches.append(cur) }
             return (ctx(openRows), ctx(doneRows), batches, Set(openRows.map(\.item.id)),
-                    Set(meetings.map(\.id)), openRows.map(\.item.text) + doneRows.map(\.item.text))
+                    allKnown, openRows.map(\.item.text) + doneRows.map(\.item.text), processed, allKnown)
         }.value
-        guard !prep.batches.isEmpty || !prep.open.isEmpty else { tidyProgress = nil; return .ok(ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0)) }
+        // Nothing new to review since the last Tidy → skip the AI call entirely (the cheap common case).
+        guard !prep.batches.isEmpty else {
+            tidyProgress = nil
+            // No open tasks at all vs. no NEW calls — both are "nothing to do", but say which.
+            let nothingNew = !prep.open.isEmpty && !fullRescan
+            return .ok(ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0, nothingNew: nothingNew))
+        }
 
         let maxBatches = 24
         let coveredAllCalls = prep.batches.count <= maxBatches
@@ -1470,6 +1491,9 @@ final class AppEnvironment {
             }
         }
         if Task.isCancelled { tidyProgress = nil; return .cancelled }
+        // We successfully REVIEWED these calls — record them so a re-run skips them (even if there was
+        // nothing to change). Only reached when no batch hard-failed.
+        markTidied(prep.processed, allKnown: prep.allKnown)
         guard !reword.isEmpty || !complete.isEmpty || !duplicates.isEmpty || !adds.isEmpty else {
             tidyProgress = nil; lastTidyUndo = nil
             return .ok(ReconcileSummary(reworded: 0, completed: 0, deduped: 0, added: 0, coveredAllCalls: coveredAllCalls))

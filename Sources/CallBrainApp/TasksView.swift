@@ -48,14 +48,22 @@ struct TasksView: View {
                 HStack(spacing: Space.s) {
                     Text("Tasks").font(.cbTitle).foregroundStyle(Theme.textPrimary)
                     Spacer()
-                    Button { tidy() } label: {
+                    // Primary click = INCREMENTAL tidy (only new calls); the ▾ menu offers a full re-scan.
+                    Menu {
+                        Button { tidy(fullRescan: true) } label: {
+                            Label("Re-tidy everything", systemImage: "arrow.clockwise")
+                        }
+                        .help("Re-scan every call from scratch, ignoring what's already been tidied.")
+                    } label: {
                         HStack(spacing: 5) {
                             if tidying { ProgressView().controlSize(.small) }
                             else { Image(systemName: CBIcon.premium) }
                             Text(tidying ? "Tidying…" : "Tidy with AI")
                         }
-                    }
+                    } primaryAction: { tidy() }
+                    .menuStyle(.button)
                     .buttonStyle(.borderedProminent).tint(Theme.accent)
+                    .fixedSize()
                     .disabled(tidying || localOnly)
                     .help(localOnly
                           ? "Tidy uses cloud AI — turn off Local-only mode in Settings to use it."
@@ -328,7 +336,7 @@ struct TasksView: View {
         }
     }
 
-    private func tidy() {
+    private func tidy(fullRescan: Bool = false) {
         guard !tidying else { return }
         guard !localOnly else {   // belt-and-suspenders: the button is disabled, but never call the cloud here
             withAnimation(Theme.springy) { tidySummary = "Tidy uses cloud AI — turn off Local-only mode in Settings to use it." }
@@ -336,7 +344,7 @@ struct TasksView: View {
         }
         tidying = true; tidySummary = nil; cancelRequested = false
         tidyTask = Task {
-            let outcome = await env.reconcileTasks()
+            let outcome = await env.reconcileTasks(fullRescan: fullRescan)
             // If the user hit Cancel, revert anything that was applied (no-op if nothing was) and clear —
             // a TRUE cancel, whether it landed during the AI phase (nothing applied) or the brief apply.
             if cancelRequested {
@@ -360,7 +368,9 @@ struct TasksView: View {
             case .ok(let r):
                 tidyFailed = false
                 var msg: String
-                if r.reworded + r.completed + r.deduped + r.added == 0 {
+                if r.nothingNew {
+                    msg = "Nothing new since your last tidy — you're all caught up."
+                } else if r.reworded + r.completed + r.deduped + r.added == 0 {
                     msg = "Your task list is already tidy — nothing to change."
                 } else {
                     var parts: [String] = []
