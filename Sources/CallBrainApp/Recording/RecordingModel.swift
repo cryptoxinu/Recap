@@ -110,6 +110,14 @@ final class RecordingModel {
         let began = Date()
         do {
             try await capture.start()
+            // Capturing the OTHER participants ("Call audio") needs Screen Recording. If it isn't granted yet,
+            // keep recording your mic but surface a ONE-TAP fix — the on-device live transcript still works for
+            // what your mic hears, and enabling Screen Recording captures the whole call next time. (The native
+            // "Allow" dialog is popped from SystemAudioCapture; this drives the in-window banner + Settings jump.)
+            if !PrivacySettings.screenRecordingAuthorized() {
+                permissionIssue = .screenRecording
+                errorText = "Recap can hear you, but not the other participants yet. Turn on Screen Recording for Recap (button below), then start the recording again to capture the whole call."
+            }
             // Fetch the high-accuracy final-pass model in the background now, so it's likely cached by
             // the time the call ends — the live path uses the small cached model and never waits on it.
             env.ensureFinalTranscriptionModel()

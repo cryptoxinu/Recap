@@ -33,8 +33,14 @@
   // speaker turn. These region selectors are only a fast hint — refresh them from a live solo Meet
   // ("New meeting" → CC on → inspect) if Meet changes them; the avatar-anchored structural path below
   // is what actually keeps this working across DOM churn.
+  // Ordered most-specific → most-general. Every match is still gated (visible, non-interactive, yields
+  // parseable rows) in locateMeetCaptionRegion, so the broad aria-label matches can't grab the wrong
+  // box. The role-agnostic `[aria-label*='aption' i]` future-proofs against Meet dropping/renaming the
+  // ARIA role or churning its obfuscated jsname/class values (the durable signal is the a11y label).
   const MEET_CAPTION_REGION_SELECTORS = [
     "[role='region'][aria-label*='aption' i]",
+    "[role='log'][aria-label*='aption' i]",   // Meet sometimes exposes captions as a live log
+    "[aria-label*='aption' i]",               // any labelled element (row-gated below)
     "div[jsname='dsyhDe']",
     "div[jsname='YSxPC']",
     ".a4cQT"
@@ -487,12 +493,57 @@
     return entries;
   };
 
-  const meetRowsFrom = (root) => {
-    const entries = meetCaptionEntries(root);
-    if (entries.length === 0) {
+  // Avatar-less fallback for the current Google Meet caption UI (the "Summarize captions"-pill variant):
+  // each turn renders as a speaker-name element + a text element with NO per-speaker avatar <img>, so the
+  // avatar-anchored path above finds nothing. We instead locate the SMALLEST containers that parse as a
+  // complete name+text entry. "Smallest" is the key to one-row-per-turn: if a descendant of a candidate
+  // ALSO parses as an entry, this candidate spans more than one turn (or is the whole scroll region), so
+  // we skip it — that's what prevents the two speakers' words merging into a single wall.
+  const meetRowsWithoutAvatar = (region) => {
+    if (!region || !isVisibleElement(region)) {
       return [];
     }
-    return uniqueRows(entries.map(parseMeetEntry).filter(Boolean));
+    let candidates;
+    try {
+      candidates = Array.from(region.querySelectorAll("div,li,section,p")).slice(0, MAX_SCAN_ELEMENTS);
+    } catch {
+      return [];
+    }
+    const minimalEntries = [];
+    const seen = new Set();
+    for (const candidate of candidates) {
+      if (!isVisibleElement(candidate) || isInteractive(candidate) || !parseMeetEntry(candidate)) {
+        continue;
+      }
+      let hasParsingDescendant = false;
+      try {
+        for (const inner of candidate.querySelectorAll("div,li,section,p")) {
+          if (inner !== candidate && isVisibleElement(inner) && !isInteractive(inner) && parseMeetEntry(inner)) {
+            hasParsingDescendant = true;
+            break;
+          }
+        }
+      } catch {
+        // Treat as minimal if we can't inspect descendants.
+      }
+      if (hasParsingDescendant || seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      minimalEntries.push(candidate);
+    }
+    return uniqueRows(minimalEntries.map(parseMeetEntry).filter(Boolean));
+  };
+
+  const meetRowsFrom = (root) => {
+    // Primary: avatar-anchored entries (one <img> per speaker turn). Fallback: the avatar-less name+text
+    // layout. Both keep turns separate; whichever yields rows wins so we never regress the avatar path.
+    const entries = meetCaptionEntries(root);
+    const avatarRows = uniqueRows(entries.map(parseMeetEntry).filter(Boolean));
+    if (avatarRows.length > 0) {
+      return avatarRows;
+    }
+    return meetRowsWithoutAvatar(root);
   };
 
   // Try Meet's real caption region first. Evaluate EVERY visible match of each selector (not just the

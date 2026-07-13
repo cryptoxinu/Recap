@@ -35,6 +35,11 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unc
     @discardableResult
     func startBestEffort() async -> SystemAudioCaptureState {
         publish(.starting)
+        // Proactively surface the native "Allow Screen Recording" dialog if it isn't granted yet — capturing
+        // the OTHER participants' audio needs it. Without this, ScreenCaptureKit just fails on a denied grant
+        // and the user is left digging through System Settings. The system presents this prompt out-of-process
+        // (not our UI), so it's safe off the main thread and doesn't stall it. No-op once granted.
+        _ = PrivacySettings.requestScreenRecording()
         do {
             // Any display works — we only take audio, no frames. excludingWindows keeps it cheap.
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
