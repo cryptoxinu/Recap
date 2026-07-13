@@ -258,22 +258,26 @@ struct EngineStatusPill: View {
                  status.snap.ollamaOK ? "running" : "not running")
             if !status.snap.ollamaOK {
                 Button("Start local AI") {
-                    // One-click fix (Task 7.4): launch the Ollama app if installed, else `ollama serve`.
                     Task.detached {
-                        let app = URL(fileURLWithPath: "/Applications/Ollama.app")
-                        if FileManager.default.fileExists(atPath: app.path) {
-                            _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: .init())
-                        } else {
-                            let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                            p.arguments = ["-lc", "nohup ollama serve >/dev/null 2>&1 &"]
-                            try? p.run()
-                        }
+                        SystemStatus.startOllama()
                         try? await Task.sleep(for: .seconds(3))
                         await status.refresh()
                         await MainActor.run { env.drainPendingEmbeddings() }   // settle IOUs on recovery
                     }
                 }
                 .buttonStyle(.borderedProminent).controlSize(.small)
+            } else {
+                // In-app OFF switch (no more desktop scripts). Force-unloads the model + stops the server so
+                // nothing stays resident. It auto-starts again the moment you record, so this is safe to use.
+                Button("Turn off local AI") {
+                    Task.detached {
+                        SystemStatus.stopOllama()
+                        await status.refresh()
+                    }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                Text("Auto-starts when you record — safe to turn off.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             line("Premium · \(env.providerPrimary == .codex ? "Codex" : "Claude") CLI", premiumOK,
                  premiumOK ? "available" : "CLI not found")
