@@ -98,6 +98,11 @@ public final class WhisperKitTranscriber: CallBrainCore.Transcriber, @unchecked 
 
     public func prewarm() async { _ = try? await ensure() }
 
+    /// Like `prewarm()` but SURFACES a total load failure instead of swallowing it. The live serve child uses
+    /// this to EXIT (rather than silently answer empty windows forever) when no model in its chain can load,
+    /// so the parent `SidecarLiveTranscriber` sees the child die and can degrade / surface the failure.
+    public func loadOrThrow() async throws { _ = try await ensure() }
+
     /// Release the loaded model (drops the cached `WhisperKit` → CoreML unloads it). The next call
     /// reloads (and re-resolves the preferred model, so a newly-downloaded turbo is picked up). An
     /// in-flight `transcribe` already holds its own reference and completes safely.
