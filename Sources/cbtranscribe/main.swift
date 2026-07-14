@@ -72,7 +72,15 @@ struct CBTranscribe {
             fallbacks: ["openai_whisper-base", "openai_whisper-tiny"],
             allowDownload: false,
             unloadAfterEach: false)
-        await transcriber.prewarm()
+        // Load the model BEFORE serving. If NO model in the chain loads, exit non-zero rather than answering
+        // every window with a well-formed empty frame (which the parent would score as success → blank
+        // transcript forever). A non-zero exit surfaces to the parent as a dead child → it degrades / logs.
+        do {
+            try await transcriber.loadOrThrow()
+        } catch {
+            FileHandle.standardError.write(Data("live serve model load FAILED (\(model)): \(error.localizedDescription)\n".utf8))
+            exit(3)
+        }
         let stdin = FileHandle.standardInput
         let stdout = FileHandle.standardOutput
         FileHandle.standardError.write(Data("live serve ready (\(model))\n".utf8))

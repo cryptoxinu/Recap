@@ -37,7 +37,9 @@ struct LiveCaptionPeek: View {
             ZStack {
                 if blocks.isEmpty { waiting } else { scroll }
             }
-            .frame(height: 150)
+            // Taller, adaptive pane so more of the conversation is readable at once (the old fixed 150pt
+            // showed ~2 turns). Bounded so the left column's other cards still fit.
+            .frame(minHeight: 210, maxHeight: 340)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.cardFill))
@@ -47,14 +49,14 @@ struct LiveCaptionPeek: View {
     private var header: some View {
         HStack(spacing: 6) {
             Image(systemName: "captions.bubble.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .font(.cbCaption.weight(.semibold))
                 .foregroundStyle(Theme.success)
             Text("Google Meet captions")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.cbCaption.weight(.semibold))
+                .foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 0)
             Text("accurate · real names")
-                .font(.system(size: 10, weight: .medium))
+                .font(.cbFootnote.weight(.medium))
                 .foregroundStyle(Theme.success)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Capsule().fill(Theme.success.opacity(0.14)))
@@ -170,7 +172,7 @@ private struct CaptionBlockRow: View {
                     .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                         .fill(Theme.surfaceElevated))
                     .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .strokeBorder(tint.opacity(0.22), lineWidth: 1))
+                        .strokeBorder(tint.opacity(0.32), lineWidth: 1))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

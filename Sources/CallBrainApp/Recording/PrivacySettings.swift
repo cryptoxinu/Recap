@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 
 /// Deep-links to the exact macOS Privacy & Security pane for a recording permission, so a denied grant is
 /// one tap to fix instead of "go dig through System Settings" (Phase 6 — TCC re-grant friction). After a
@@ -32,5 +33,18 @@ enum PrivacySettings {
                 NSWorkspace.shared.open(fallback)
             }
         }
+    }
+
+    /// Whether Screen Recording is authorized right now. ScreenCaptureKit needs this to capture the OTHER
+    /// participants' audio ("Call audio"); without it we fall back to mic-only.
+    static func screenRecordingAuthorized() -> Bool { CGPreflightScreenCaptureAccess() }
+
+    /// Proactively pop the native "Allow Screen Recording" dialog when it isn't granted yet, so the user gets
+    /// a one-click Allow instead of hunting through System Settings (the app previously just let
+    /// ScreenCaptureKit fail silently). No-op once granted. Returns the current authorization status.
+    @discardableResult
+    static func requestScreenRecording() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        return CGRequestScreenCaptureAccess()
     }
 }

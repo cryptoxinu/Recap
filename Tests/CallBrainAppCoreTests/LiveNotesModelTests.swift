@@ -37,6 +37,24 @@ struct LiveNotesModelTests {
     }
 
     @MainActor
+    @Test("re-summarizes on a large SHRINK too (live source flips You/Them audio → shorter Meet captions)")
+    func testResummarizesOnSourceSwitchShrink() async {
+        let src = StubNotes(passes: [["from audio"], ["from captions"]])
+        // Start on the on-device audio transcript, then flip to the (much shorter) named Meet captions.
+        var text = String(repeating: "Them: talk. ", count: 60)   // ~720 chars
+        let model = LiveNotesModel(source: src, transcript: { text }, minGrowthChars: 200)
+
+        await model.refreshIfGrown()          // first pass over the audio text
+        #expect(model.notes.map(\.text) == ["from audio"])
+        #expect(await src.callCount() == 1)
+
+        text = "Alex Rivera: talk."          // source switched → big shrink (~700 → ~18 chars)
+        await model.refreshIfGrown()          // must re-summarize despite the length DROP
+        #expect(await src.callCount() == 2)
+        #expect(model.notes.map(\.text) == ["from captions"])
+    }
+
+    @MainActor
     @Test("an empty pass keeps the last good notes (never blanks them)")
     func testEmptyPassKeepsLastNotes() async {
         let src = StubNotes(passes: [["good note"], []])

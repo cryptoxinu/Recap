@@ -14,6 +14,8 @@ const PORT_RANGE = Array.from({ length: 11 }, (_, i) => 8422 + i); // 8422–843
 let cfg = { port: null, token: null };
 let streaming = false;
 let pairing = false;
+let repairing = false;   // guards the one-shot stale-token auto-heal so 2s polls don't stack attempts
+let needsRepair = false; // latched once we've surfaced the manual re-pair card (cleared on a fresh token)
 
 // ---- config + connection ---------------------------------------------------
 
@@ -29,6 +31,7 @@ async function loadConfig() {
     if (!pairing) pairOrb("idle");
     return false;
   }
+  needsRepair = false; // a real token is present again — allow health/record polls to trust it
   el("pairCard").hidden = true;
   el("main").hidden = false;
   return true;
@@ -184,11 +187,39 @@ async function checkHealth() {
   if (!cfg.token) return;
   try {
     const r = await fetch(`${base()}/health`, { headers: authHeaders() });
-    if (r.ok) setStatus("ok", "Connected");
-    else if (r.status === 401) setStatus("off", "Bad token");
+    if (r.ok) { setStatus("ok", "Connected"); needsRepair = false; }
+    else if (r.status === 401) { setStatus("off", "Reconnect"); void handleStaleToken(); }
     else setStatus("off", "App unreachable");
   } catch {
     setStatus("off", "App not running");
+  }
+}
+
+// A 401 means the app is running but rejected our stored token — almost always because an app REINSTALL
+// rotated the loopback token. First try to heal SILENTLY over Chrome's authenticated native-messaging
+// channel: `cbpairhost` hands back the app's CURRENT token even with no pairing window open, so a
+// reinstall self-recovers with zero clicks. Only if that path is unavailable (host not installed / app
+// closed) do we drop to the honest re-pair card — never a misleading "Not recording"/"paired" state.
+async function handleStaleToken() {
+  if (repairing || needsRepair) return;
+  repairing = true;
+  try {
+    const nm = await tryNativeMessaging();
+    if (nm && (await verifyToken(nm.token, nm.port))) {
+      // storage.onChanged → loadConfig() swaps back to main + checkHealth clears needsRepair.
+      await chrome.storage.local.set({ token: nm.token, port: nm.port });
+      return;
+    }
+    // Couldn't auto-heal — surface the truth and let the user re-pair. (We keep the dead token in
+    // storage so the poll loops simply no-op via the needsRepair latch rather than thrash.)
+    needsRepair = true;
+    el("pairCard").hidden = false;
+    el("main").hidden = true;
+    setStatus("off", "Reconnect");
+    pairOrb("bad");
+    pairStatus("Recap was reinstalled or restarted — pair again to reconnect.", "bad");
+  } finally {
+    repairing = false;
   }
 }
 
@@ -297,38 +328,73 @@ async function ask(query) {
 
 let recording = false;
 
+// The record button's inner spans (see sidepanel.html): keep the icon + separate label/state nodes so
+// the CSS (`.record-btn.recording .rec-ico` / `.rec-state`) keeps working. Earlier this used
+// `btn.textContent = …`, which FLATTENED the button (destroying those spans) and, worse, read a
+// non-existent `#recordBar` element — so the guard `if (!bar) return` bailed on every call and the row
+// was frozen at the HTML's hard-coded "Not recording" even while the app was actively recording.
+function recordEls() {
+  const btn = el("recordBtn");
+  return { btn, label: btn?.querySelector(".rec-label") || null, state: el("recordState") };
+}
+
 function setRecordState(isRec, isProcessing, elapsed) {
   recording = isRec;
-  const btn = el("recordBtn");
-  const state = el("recordState");
-  const bar = el("recordBar");
-  if (!btn || !state || !bar) return;
+  const { btn, label, state } = recordEls();
+  if (!btn || !label || !state) return;
   if (isProcessing) {
-    btn.textContent = "Transcribing…";
+    label.textContent = "Transcribing…";
     btn.disabled = true;
     state.textContent = "Finishing up…";
-    bar.classList.remove("recording");
+    btn.classList.remove("recording");
   } else if (isRec) {
-    btn.textContent = "Stop recording";
+    label.textContent = "Stop recording";
     btn.disabled = false;
     state.textContent = `● Recording ${elapsed || ""}`.trim();
-    bar.classList.add("recording");
+    btn.classList.add("recording"); // the button itself is the "bar" the CSS styles
   } else {
-    btn.textContent = "Record this call";
+    label.textContent = "Record this call";
     btn.disabled = false;
     state.textContent = "Not recording";
-    bar.classList.remove("recording");
+    btn.classList.remove("recording");
   }
+}
+
+// Honest record-row state when we CAN'T trust the app's recording flag (token stale, app down, or the
+// endpoint erroring). We must never render "Not recording" here — that lies when the real problem is
+// connectivity, which is exactly the bug being fixed. The status pill + pair card carry the recovery.
+function setRecordUnavailable(text) {
+  recording = false;
+  const { btn, label, state } = recordEls();
+  if (!btn || !label || !state) return;
+  label.textContent = "Record this call";
+  btn.disabled = true; // can't start a recording we can't reach
+  state.textContent = text;
+  btn.classList.remove("recording");
 }
 
 async function pollRecordStatus() {
   if (!cfg.token) return;
   try {
     const r = await fetch(`${base()}/record/status`, { headers: authHeaders() });
-    if (!r.ok) return;
+    // 401 from the loopback server is deterministic: the app is UP but our token doesn't match — after
+    // an app reinstall the token rotates, so this reliably means "stale token", never a transient. Show
+    // the truth and try to reconnect instead of pretending the call isn't being recorded.
+    if (r.status === 401) {
+      setRecordUnavailable("Reconnect to Recap");
+      void handleStaleToken();
+      return;
+    }
+    if (!r.ok) {
+      setRecordUnavailable("Recap unreachable");
+      return;
+    }
     const j = await r.json().catch(() => ({}));
     setRecordState(!!j.recording, !!j.processing, j.elapsed);
-  } catch { /* app unreachable — leave the last state, checkHealth surfaces the disconnect */ }
+  } catch {
+    // Refused / timed out → the app isn't running. Say so; don't leave a misleading "Not recording".
+    setRecordUnavailable("App not running");
+  }
 }
 
 async function toggleRecord() {

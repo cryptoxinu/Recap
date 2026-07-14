@@ -109,7 +109,19 @@ final class RecordingModel {
         // proximity matching (audit LOW). Kept only if capture actually starts.
         let began = Date()
         do {
+            // Auto-start the local AI if it was left off, so AI notes / catch-up assistant / summaries never
+            // silently fail on a recording (founder: kick on by itself in case I left it off). Fire-and-forget
+            // — audio capture doesn't wait on it; the assistant's retry loop connects once it's up (~2s).
+            Task.detached { await SystemStatus.ensureRunning() }
             try await capture.start()
+            // Capturing the OTHER participants ("Call audio") needs Screen Recording. If it isn't granted yet,
+            // keep recording your mic but surface a ONE-TAP fix — the on-device live transcript still works for
+            // what your mic hears, and enabling Screen Recording captures the whole call next time. (The native
+            // "Allow" dialog is popped from SystemAudioCapture; this drives the in-window banner + Settings jump.)
+            if !PrivacySettings.screenRecordingAuthorized() {
+                permissionIssue = .screenRecording
+                errorText = "Recap can hear you, but not the other participants yet. Turn on Screen Recording for Recap (button below), then start the recording again to capture the whole call."
+            }
             // Fetch the high-accuracy final-pass model in the background now, so it's likely cached by
             // the time the call ends — the live path uses the small cached model and never waits on it.
             env.ensureFinalTranscriptionModel()
@@ -118,16 +130,28 @@ final class RecordingModel {
             lt.start()
             self.live = lt
             let engine = env.ask
-            let assistant = LiveAssistantModel(ask: engine, transcript: { [weak lt] in
-                lt?.currentText() ?? ""
-            })
+            // The transcript both the catch-up assistant AND the auto-notes read. PREFER the extension's
+            // Google Meet captions (real participant names) whenever they're flowing, and fall back to the
+            // on-device You/Them audio transcript only when there are no captions (CC off, extension not
+            // paired, or a non-Meet call). This is what stops the AI notes from writing "Them has a PR…" —
+            // the display panel already prefers named captions (RecordView), so now the notes/assistant match.
+            let session = env.meetSession
+            let liveTranscriptText: @MainActor () -> String = { [weak lt] in
+                // Skip building the caption string when there are no captions (cheap short-circuit), then
+                // let the pure, tested helper decide which source wins.
+                preferredLiveTranscript(
+                    captions: session.isEmpty ? "" : session.transcript(),
+                    audio: lt?.currentText() ?? ""
+                )
+            }
+            let assistant = LiveAssistantModel(ask: engine, transcript: liveTranscriptText)
             assistant.warmUp()   // prime the local fast model so the first in-call answer is instant
             assistant.startAutoSuggestions()
             self.assistant = assistant
             // "Notes that write themselves" (Granola-style) — same warm local lane, growth-gated so it
             // doesn't burn the model on unchanged transcript. The chosen template shapes the structure.
             let template = env.noteTemplates.template(id: selectedTemplateID) ?? .general
-            let notes = LiveNotesModel(source: engine, transcript: { [weak lt] in lt?.currentText() ?? "" },
+            let notes = LiveNotesModel(source: engine, transcript: liveTranscriptText,
                                        instructions: template.instructions)
             notes.start()
             self.notes = notes
