@@ -68,8 +68,13 @@ public final class LiveNotesModel {
     func refreshIfGrown() async {
         guard inFlight == nil else { return }   // never overlap passes
         let text = transcript()
-        let grewEnough = text.count - lastSummarizedLen >= minGrowthChars
-        guard grewEnough || (notes.isEmpty && !text.isEmpty) else { return }
+        // Re-summarize when the transcript CHANGED by a meaningful amount in EITHER direction. Growth is the
+        // normal case; a large SHRINK happens when the live source flips mid-call from the on-device You/Them
+        // audio to the (shorter) named Meet captions — without the abs() the notes would freeze at stale
+        // You/Them text until captions re-grew past the old length. Small caption revisions stay under the
+        // threshold, so this never thrashes the model.
+        let changedEnough = abs(text.count - lastSummarizedLen) >= minGrowthChars
+        guard changedEnough || (notes.isEmpty && !text.isEmpty) else { return }
         lastSummarizedLen = text.count
         let window = String(text.suffix(windowChars))
         // Task inherits @MainActor here; `await summarizeLive` suspends (runs off-main) then resumes on

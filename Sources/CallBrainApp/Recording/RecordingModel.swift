@@ -130,16 +130,28 @@ final class RecordingModel {
             lt.start()
             self.live = lt
             let engine = env.ask
-            let assistant = LiveAssistantModel(ask: engine, transcript: { [weak lt] in
-                lt?.currentText() ?? ""
-            })
+            // The transcript both the catch-up assistant AND the auto-notes read. PREFER the extension's
+            // Google Meet captions (real participant names) whenever they're flowing, and fall back to the
+            // on-device You/Them audio transcript only when there are no captions (CC off, extension not
+            // paired, or a non-Meet call). This is what stops the AI notes from writing "Them has a PR…" —
+            // the display panel already prefers named captions (RecordView), so now the notes/assistant match.
+            let session = env.meetSession
+            let liveTranscriptText: @MainActor () -> String = { [weak lt] in
+                // Skip building the caption string when there are no captions (cheap short-circuit), then
+                // let the pure, tested helper decide which source wins.
+                preferredLiveTranscript(
+                    captions: session.isEmpty ? "" : session.transcript(),
+                    audio: lt?.currentText() ?? ""
+                )
+            }
+            let assistant = LiveAssistantModel(ask: engine, transcript: liveTranscriptText)
             assistant.warmUp()   // prime the local fast model so the first in-call answer is instant
             assistant.startAutoSuggestions()
             self.assistant = assistant
             // "Notes that write themselves" (Granola-style) — same warm local lane, growth-gated so it
             // doesn't burn the model on unchanged transcript. The chosen template shapes the structure.
             let template = env.noteTemplates.template(id: selectedTemplateID) ?? .general
-            let notes = LiveNotesModel(source: engine, transcript: { [weak lt] in lt?.currentText() ?? "" },
+            let notes = LiveNotesModel(source: engine, transcript: liveTranscriptText,
                                        instructions: template.instructions)
             notes.start()
             self.notes = notes

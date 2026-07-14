@@ -359,7 +359,8 @@ struct LiveTranscriptPeek: View {
             ZStack {
                 if turns.isEmpty { TranscriptEmptyState() } else { scroll }
             }
-            .frame(height: 150)
+            // Taller, adaptive pane so more of the conversation is readable at once (matches LiveCaptionPeek).
+            .frame(minHeight: 210, maxHeight: 340)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.cardFill))
@@ -370,13 +371,13 @@ struct LiveTranscriptPeek: View {
         HStack(spacing: 6) {
             LivePulse()
             Text("Live transcript")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .font(.cbCaption.weight(.semibold))
+                .foregroundStyle(Theme.textSecondary)
             Spacer(minLength: 0)
             if !atBottom {
                 Label("scrolled up", systemImage: "arrow.down")
                     .labelStyle(.titleAndIcon)
-                    .font(.system(size: 10))
+                    .font(.cbFootnote)
                     .foregroundStyle(.tertiary)
                     .transition(.opacity)
             }
@@ -461,7 +462,7 @@ private struct TranscriptTurnRow: View {
                     .font(.cbBody)
                     .foregroundStyle(Theme.textPrimary)
                     .lineSpacing(1.5)
-                    .opacity(turn.confirmed ? 1 : 0.5)
+                    .opacity(turn.confirmed ? 1 : 0.62)   // still-forming text stays legible, not ghosted
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading) // bound width so long turns wrap, not clip
                     .padding(.horizontal, Space.m)
@@ -469,7 +470,7 @@ private struct TranscriptTurnRow: View {
                     .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                         .fill(Theme.surfaceElevated))
                     .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .strokeBorder(speakerColor.opacity(0.22), lineWidth: 1))
+                        .strokeBorder(speakerColor.opacity(0.32), lineWidth: 1))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

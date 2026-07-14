@@ -9,8 +9,10 @@
   const CAPTIONS_INACTIVE_MS = 8000;
   const AUTO_CAPTIONS_RETRY_MS = 1500; // active cadence while we still need to enable captions
   const AUTO_CAPTIONS_IDLE_MS = 5000; // slow watch once done — just to catch an SPA meeting change
-  const CAPTIONS_TOGGLE_LABEL_RE = /\bturn (?:on|off) captions\b/i;
+  const CAPTIONS_ACTION_LABEL_RE = /\bturn (?:on|off) captions\b/i; // the explicit CC toggle action label
   const CAPTIONS_OFF_LABEL_RE = /\bturn on captions\b/i; // Meet shows this label only when captions are OFF
+  const CAPTIONS_ICON_RE = /\bclosed_caption(_off)?\b/;  // Material Symbols ligature on icon-only CC buttons
+  const CAPTIONS_LOOKALIKE_RE = /summar|translat|language|setting|option/i; // NEVER click these CC look-alikes
   const MAX_SCAN_ELEMENTS = 1500;
   const MAX_TEXT_LENGTH = 5000;
   const CAPTION_LABEL_RE = /\b(caption|captions|subtitle|subtitles|transcript)\b/i;
@@ -897,12 +899,27 @@
   // in-call captions toggle is present, click it once if captions are OFF. The button's accessible
   // label describes the ACTION: "Turn on captions" ⇒ currently off. We act at most once per meeting so
   // we never fight a user who deliberately turns captions back off.
+  // Read the CC toggle's on/off state from a Material Symbols icon ligature ("closed_caption" /
+  // "closed_caption_off") plus aria-pressed — for Meet builds whose CC button carries no text label.
+  // Returns true (captions off), false (on), or null when this button isn't the captions toggle.
+  const captionsIconOffState = (button) => {
+    const iconText = Array.from(button.querySelectorAll("i,span"))
+      .map((node) => cleanText(node.textContent || ""))
+      .find((text) => CAPTIONS_ICON_RE.test(text));
+    if (!iconText) return null;
+    const pressed = button.getAttribute("aria-pressed");
+    if (pressed === "true") return false;
+    if (pressed === "false") return true;
+    return /_off\b/.test(iconText); // no pressed state — the "_off" icon variant means captions are off
+  };
+
   const locateCaptionsToggle = () => {
     try {
       const candidates = Array.from(
         document.querySelectorAll("button,[role='button']")
       ).slice(0, MAX_SCAN_ELEMENTS);
 
+      let iconFallback = null;
       for (const candidate of candidates) {
         const button = candidate.matches?.("button,[role='button']")
           ? candidate
@@ -912,10 +929,20 @@
         }
 
         const label = elementLabelText(button);
-        if (CAPTIONS_TOGGLE_LABEL_RE.test(label)) {
+        // Highest confidence: the explicit "Turn on/off captions" action label wins outright.
+        if (CAPTIONS_ACTION_LABEL_RE.test(label)) {
           return { button, off: CAPTIONS_OFF_LABEL_RE.test(label) };
         }
+        // Fallback for icon-only CC buttons — remember the first, but keep scanning so a later
+        // explicit-label button still wins. Skip Summarize/language/settings look-alikes entirely.
+        if (!iconFallback && !CAPTIONS_LOOKALIKE_RE.test(label)) {
+          const iconOff = captionsIconOffState(button);
+          if (iconOff !== null) {
+            iconFallback = { button, off: iconOff };
+          }
+        }
       }
+      return iconFallback;
     } catch {
       // Never throw into the Meet page; a later attempt can recover.
     }
