@@ -26,7 +26,14 @@ final class RecordingModel {
     /// polled on the ticker so the panel can show accurate named turns instead of the You/Them audio
     /// guess (T2 slice 2). Empty when no extension/captions — the panel then falls back to the audio peek.
     private(set) var liveCaptions: [CaptionTurn] = []
-    var hasLiveCaptions: Bool { !liveCaptions.isEmpty }
+    /// Whether the relayed captions are still ARRIVING (a turn within `captionStaleSeconds`), refreshed on
+    /// the ticker. Gate the named-caption panel on this so a stopped stream (CC off / extension gone) falls
+    /// back to the on-device audio peek instead of freezing on the last captions (Codex P1).
+    private(set) var captionsFresh = false
+    var hasLiveCaptions: Bool { !liveCaptions.isEmpty && captionsFresh }
+    /// How long after the last relayed caption we still treat the Meet stream as the live source. Longer
+    /// than a normal between-utterance pause, shorter than a "CC gone" gap.
+    static let captionStaleSeconds: Double = 25
     /// The note TEMPLATE for this recording (Granola Phase C) — shapes the AI-notes structure. Chosen in
     /// the idle form; defaults to the user's default template.
     var selectedTemplateID: String = NoteTemplateLibrary.load().defaultID
@@ -137,10 +144,13 @@ final class RecordingModel {
             // the display panel already prefers named captions (RecordView), so now the notes/assistant match.
             let session = env.meetSession
             let liveTranscriptText: @MainActor () -> String = { [weak lt] in
-                // Skip building the caption string when there are no captions (cheap short-circuit), then
-                // let the pure, tested helper decide which source wins.
-                preferredLiveTranscript(
-                    captions: session.isEmpty ? "" : session.transcript(),
+                // Prefer the named Meet captions ONLY while the stream is still arriving. If captions stop
+                // mid-call (CC turned off, extension disconnected) MeetSession keeps its retained turns, so a
+                // plain isEmpty check would freeze the notes/assistant on stale captions while people keep
+                // talking — once captions go stale, fall back to the still-growing You/Them audio (Codex P1).
+                let captionsFresh = (session.secondsSinceLastTurn() ?? .infinity) <= RecordingModel.captionStaleSeconds
+                return preferredLiveTranscript(
+                    captions: captionsFresh ? session.transcript() : "",
                     audio: lt?.currentText() ?? ""
                 )
             }
@@ -167,6 +177,9 @@ final class RecordingModel {
                     // Reflect the extension's relayed captions into the panel (recent tail only, for a
                     // stable bounded view). No-op when the extension isn't feeding this call.
                     self.liveCaptions = Array(session.turns().suffix(80))
+                    // Track whether captions are still arriving so the panel (via hasLiveCaptions) falls back
+                    // to the audio peek when the stream stops, matching the notes/assistant source choice.
+                    self.captionsFresh = (session.secondsSinceLastTurn() ?? .infinity) <= RecordingModel.captionStaleSeconds
                 }
             }
         } catch {
