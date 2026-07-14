@@ -32,6 +32,9 @@ public final class MeetSession: @unchecked Sendable {
     private var retained: [CaptionTurn] = []
     private var retainedBytes = 0
     private var lastTurnFinal = true   // was the newest retained turn a finalized caption?
+    private var lastTurnAt: Date?      // when a caption turn was last relayed — drives caption FRESHNESS so a
+                                       // stopped stream (CC turned off / extension disconnected) doesn't keep
+                                       // the live notes+assistant frozen on stale captions (Codex P1).
     private var recordingLeased = false   // a live recording owns this buffer (see beginRecording)
     private var droppedWhileLeased = false // did the cap evict any turn during the current recording lease?
 
@@ -47,7 +50,7 @@ public final class MeetSession: @unchecked Sendable {
     /// (Meet revises the active caption in place — including non-prefix ASR corrections) instead of
     /// appending a duplicate. Once a turn is finalized (`final == true`), the next same-speaker turn is a
     /// new utterance and appends. This fixes the caption duplication/bloat on real calls (audit MED).
-    public func append(speaker: String, text: String, final: Bool = true) {
+    public func append(speaker: String, text: String, final: Bool = true, at: Date = Date()) {
         let trimmedSpeaker = Self.truncated(
             speaker.trimmingCharacters(in: .whitespacesAndNewlines),
             maxCharacters: Self.maxSpeakerCharacters
@@ -60,6 +63,7 @@ public final class MeetSession: @unchecked Sendable {
 
         let incoming = CaptionTurn(speaker: trimmedSpeaker, text: trimmedText)
         lock.withLock {
+            lastTurnAt = at   // a real turn arrived → refresh the freshness clock
             defer { lastTurnFinal = final }
             guard let last = retained.last else {
                 applyCapped([incoming])
@@ -110,7 +114,15 @@ public final class MeetSession: @unchecked Sendable {
             retained = []
             retainedBytes = 0
             lastTurnFinal = true
+            lastTurnAt = nil
         }
+    }
+
+    /// Seconds since a caption turn was last relayed, or nil if none has been (used to tell an ACTIVELY
+    /// streaming caption source from a stopped one — CC turned off / extension disconnected). Injectable
+    /// `now` for tests.
+    public func secondsSinceLastTurn(now: Date = Date()) -> Double? {
+        lock.withLock { lastTurnAt.map { now.timeIntervalSince($0) } }
     }
 
     /// Reset that RESPECTS an active recording lease (audit HIGH): the extension `/import` path calls this
@@ -122,6 +134,7 @@ public final class MeetSession: @unchecked Sendable {
             retained = []
             retainedBytes = 0
             lastTurnFinal = true
+            lastTurnAt = nil
         }
     }
 
@@ -133,6 +146,7 @@ public final class MeetSession: @unchecked Sendable {
             retained = []
             retainedBytes = 0
             lastTurnFinal = true
+            lastTurnAt = nil
             recordingLeased = true
             droppedWhileLeased = false
         }
@@ -156,6 +170,7 @@ public final class MeetSession: @unchecked Sendable {
             retained = []
             retainedBytes = 0
             lastTurnFinal = true
+            lastTurnAt = nil
             recordingLeased = false
             droppedWhileLeased = false
             return out

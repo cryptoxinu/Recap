@@ -934,11 +934,16 @@
           return { button, off: CAPTIONS_OFF_LABEL_RE.test(label) };
         }
         // Fallback for icon-only CC buttons — remember the first, but keep scanning so a later
-        // explicit-label button still wins. Skip Summarize/language/settings look-alikes entirely.
-        if (!iconFallback && !CAPTIONS_LOOKALIKE_RE.test(label)) {
-          const iconOff = captionsIconOffState(button);
-          if (iconOff !== null) {
-            iconFallback = { button, off: iconOff };
+        // explicit-label button still wins. Skip Summarize/language/settings look-alikes — and test the
+        // button's TEXT CONTENT too, not just the accessible label: a look-alike like "Summarize captions"
+        // can derive its name from native child text that elementLabelText() doesn't read (Codex P2).
+        if (!iconFallback) {
+          const exclusionText = `${label} ${cleanText(button.textContent || "")}`;
+          if (!CAPTIONS_LOOKALIKE_RE.test(exclusionText)) {
+            const iconOff = captionsIconOffState(button);
+            if (iconOff !== null) {
+              iconFallback = { button, off: iconOff };
+            }
           }
         }
       }
