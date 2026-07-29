@@ -68,12 +68,47 @@ if [ -f "$STATE" ]; then
   done < "$STATE"
 fi
 
-notify() {  # $1 title, $2 message
-  if [ -n "${CBW_NOTIFY:-}" ]; then "$CBW_NOTIFY" "$1" "$2"; return; fi
+# ---- alert channels -------------------------------------------------------------------------------
+# PRIMARY is a file on the Desktop. macOS silently DROPS `osascript … display notification` unless the
+# scripting host is a registered notification client — on this Mac Script Editor is absent from
+# com.apple.ncprefs entirely, so osascript returned exit 0 while nothing ever appeared on screen. A
+# Desktop file cannot be suppressed by Focus, by Notification Center, or by a missing permission, and
+# it self-clears on recovery. The notification is kept as a best-effort SECOND channel only.
+DESKTOP="${CBW_DESKTOP:-$HOME/Desktop}"
+MARKER="$DESKTOP/⚠️ RECAP - CALLS NOT SYNCING.txt"
+
+notify() {  # $1 title, $2 message — best-effort only; never the sole channel
+  if [ -n "${CBW_NOTIFY:-}" ]; then "$CBW_NOTIFY" "$1" "$2"; return 0; fi
   local t="${1//\\/\\\\}"; t="${t//\"/\\\"}"
   local m="${2//\\/\\\\}"; m="${m//\"/\\\"}"
   /usr/bin/osascript -e "display notification \"$m\" with title \"$t\" sound name \"Basso\"" >/dev/null 2>&1
+  return 0
 }
+
+# Written on EVERY unhealthy run once past the threshold (not just the first), so deleting it while the
+# problem persists brings it straight back. Same filename each time, so it can never pile up.
+write_marker() {  # $1 reason
+  [ -d "$DESKTOP" ] || return 0
+  cat > "$MARKER" 2>/dev/null <<EOF
+Your Recap calls are NOT reaching the Hermes Mac.
+
+What's wrong:
+  $1
+
+Since: $(date '+%A %d %B %Y, %-I:%M %p')
+
+Nothing has been lost — calls are still being recorded and saved on this Mac.
+They just aren't being copied over to Hermes, so anything you ask Hermes will
+be missing the newest calls until this is fixed.
+
+Most common cause: this Mac has dropped off Tailscale.
+  Check the Tailscale icon in the menu bar. If it says you're logged out,
+  click "Log in" and this file will disappear on its own within ~15 minutes.
+
+This file is created and removed automatically. You never need to delete it.
+EOF
+}
+clear_marker() { rm -f "$MARKER" 2>/dev/null; return 0; }
 
 # ---- probes --------------------------------------------------------------------------------------
 reason=""
@@ -121,18 +156,25 @@ fi
 # ---- decide ---------------------------------------------------------------------------------------
 now=$(date +%s)
 if [ -z "$reason" ]; then
+  clear_marker                                    # unconditional: never leave a stale alarm on the Desktop
   if [ "$alerting" = "1" ]; then
-    notify "Further Health — CallBrain sync is back" "Your calls are reaching Hermes again."
+    notify "Recap — sync is back" "Your calls are reaching Hermes again. Nothing was lost."
     log "RECOVERED after $fails failed check(s)"
   fi
   fails=0; alerting=0; last_notify=0
 else
   fails=$((fails + 1))
   log "UNHEALTHY (#$fails): $reason"
-  if [ "$fails" -ge "$FAIL_THRESHOLD" ] && [ "$((now - last_notify))" -ge "$RENOTIFY" ]; then
-    notify "Further Health — calls aren't syncing" "$reason"
-    last_notify="$now"; alerting=1
-    log "NOTIFIED: $reason"
+  if [ "$fails" -ge "$FAIL_THRESHOLD" ]; then
+    # Marker first, and every time: it is the channel we can actually rely on, and it must not depend
+    # on the notifier succeeding or on the renotify debounce.
+    write_marker "$reason"
+    alerting=1
+    if [ "$((now - last_notify))" -ge "$RENOTIFY" ]; then   # debounce the NAG, not the marker
+      notify "Recap — calls aren't syncing" "$reason"
+      last_notify="$now"
+      log "NOTIFIED: $reason"
+    fi
   fi
 fi
 
