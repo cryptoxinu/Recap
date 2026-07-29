@@ -47,13 +47,20 @@ setup() {
 
   printf '#!/bin/bash\necho "$*" >> %q\n' "$BOX/notified" > "$BOX/bin/notify"; chmod +x "$BOX/bin/notify"
   : > "$BOX/notified"
+  mkdir -p "$BOX/desktop"
 
   export CBW_STATE="$BOX/state" CBW_TAILSCALE="$BOX/bin/ts" CBW_SSH="$BOX/bin/ssh" \
          CBW_NOTIFY="$BOX/bin/notify" CBW_CORPUS="$BOX/corpus" CBW_LOG="$BOX/log" \
+         CBW_DESKTOP="$BOX/desktop" \
          CBW_HOST="fake.tailnet0.ts.net" CBW_DEST="callbrain-corpus" \
          CBW_MAX_LAG=1800 CBW_FAIL_THRESHOLD=2 CBW_RENOTIFY=21600
 }
 notifs() { grep -c . "$BOX/notified" 2>/dev/null | tr -d ' '; }
+# The Desktop marker is the PRIMARY alert channel: macOS silently drops osascript notifications
+# unless Script Editor is a registered notification client (it is not, on this Mac), so an alert
+# that only calls osascript is invisible. A file on the Desktop cannot be suppressed by Focus,
+# Notification Center, or a missing permission.
+markers() { find "$BOX/desktop" -maxdepth 1 -name "*NOT SYNCING*" 2>/dev/null | wc -l | tr -d ' '; }
 
 echo "== healthy =="
 setup online ok
@@ -104,6 +111,56 @@ echo "== no alert spam while still broken =="
 setup loggedout ok
 for _ in 1 2 3 4 5 6 7 8; do "$WATCHDOG" >/dev/null 2>&1; done
 check "8 broken runs -> still only 1 alert (renotify debounce)" "$(notifs)" "1"
+
+echo "== Desktop marker (the channel that cannot be suppressed) =="
+setup online ok
+"$WATCHDOG" >/dev/null 2>&1; "$WATCHDOG" >/dev/null 2>&1
+check "no marker while healthy" "$(markers)" "0"
+
+setup loggedout ok
+"$WATCHDOG" >/dev/null 2>&1
+check "no marker below threshold (single blip)" "$(markers)" "0"
+"$WATCHDOG" >/dev/null 2>&1
+check "marker appears on the 2nd consecutive failure" "$(markers)" "1"
+MFILE=$(find "$BOX/desktop" -maxdepth 1 -name "*NOT SYNCING*" | head -1)
+if grep -qi "tailscale" "$MFILE" 2>/dev/null; then ok "marker states the cause"; else bad "marker should state the cause (got: $(cat "$MFILE" 2>/dev/null | head -3))"; fi
+if grep -qi "recap\|call" "$MFILE" 2>/dev/null; then ok "marker is written in plain language"; else bad "marker wording"; fi
+
+printf '{"BackendState":"Running","Self":{"Online":true},"Health":[]}\n' > "$BOX/ts.json"
+"$WATCHDOG" >/dev/null 2>&1
+check "marker is REMOVED on recovery (self-clearing)" "$(markers)" "0"
+
+echo "== marker survives repeated broken runs without duplicating =="
+setup loggedout ok
+for _ in 1 2 3 4 5 6; do "$WATCHDOG" >/dev/null 2>&1; done
+check "exactly one marker after 6 broken runs" "$(markers)" "1"
+
+echo "== alerting does not depend on the notifier working =="
+setup loggedout ok
+CBW_NOTIFY=/usr/bin/false "$WATCHDOG" >/dev/null 2>&1
+CBW_NOTIFY=/usr/bin/false "$WATCHDOG" >/dev/null 2>&1
+check "marker still written when the notifier FAILS" "$(markers)" "1"
+
+# The marker must NOT inherit the notification's 6-hour debounce. If the founder deletes it while the
+# outage is ongoing, the very next check has to put it back -- otherwise the Mac looks healthy for up
+# to 6 hours while calls are still not arriving.
+echo "== marker returns if deleted while still broken =="
+setup loggedout ok
+"$WATCHDOG" >/dev/null 2>&1; "$WATCHDOG" >/dev/null 2>&1
+check "marker present" "$(markers)" "1"
+rm -f "$BOX/desktop"/*NOT\ SYNCING* 2>/dev/null
+check "marker deleted by hand" "$(markers)" "0"
+"$WATCHDOG" >/dev/null 2>&1
+check "marker RETURNS on the next check (not debounced)" "$(markers)" "1"
+
+echo "== marker is actionable, not just a label =="
+setup loggedout ok
+"$WATCHDOG" >/dev/null 2>&1; "$WATCHDOG" >/dev/null 2>&1
+MF=$(find "$BOX/desktop" -maxdepth 1 -name "*NOT SYNCING*" | head -1)
+if grep -qi "not reaching\|aren't reaching\|not being copied" "$MF" 2>/dev/null; then ok "marker states the IMPACT"; else bad "marker must state the impact"; fi
+if grep -qi "menu bar\|log in\|tailscale icon" "$MF" 2>/dev/null; then ok "marker states WHAT TO DO"; else bad "marker must tell the founder what to do"; fi
+if grep -qi "nothing.*lost\|still being recorded" "$MF" 2>/dev/null; then ok "marker reassures nothing is lost"; else bad "marker must say nothing is lost"; fi
+if grep -qi "automatic\|on its own\|never need to delete" "$MF" 2>/dev/null; then ok "marker says it self-clears"; else bad "marker must say it clears itself"; fi
 
 echo "== never blocks launchd =="
 setup online unreachable
