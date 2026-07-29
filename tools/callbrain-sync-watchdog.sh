@@ -69,15 +69,18 @@ if [ -f "$STATE" ]; then
 fi
 
 # ---- alert channels -------------------------------------------------------------------------------
-# PRIMARY is a file on the Desktop. macOS silently DROPS `osascript … display notification` unless the
-# scripting host is a registered notification client — on this Mac Script Editor is absent from
-# com.apple.ncprefs entirely, so osascript returned exit 0 while nothing ever appeared on screen. A
-# Desktop file cannot be suppressed by Focus, by Notification Center, or by a missing permission, and
-# it self-clears on recovery. The notification is kept as a best-effort SECOND channel only.
+# TWO channels, because a notification alone is not reliable ENOUGH — not because it is broken.
+#   1. macOS notification (osascript). Verified working. Note it posts as "Script Editor", and it does
+#      NOT need an entry in com.apple.ncprefs to be delivered — an earlier reading of that plist wrongly
+#      concluded these were being dropped. What is true: a banner is transient, is easy to miss while
+#      away from the Mac, is hidden by Focus, and disappears once dismissed.
+#   2. A file on the Desktop — PERSISTENT. It is still there hours later, survives dismissal and Focus,
+#      states what to do in plain language, and self-clears on recovery.
+# The point of the pair is that missing #1 costs nothing, because #2 is still sitting there.
 DESKTOP="${CBW_DESKTOP:-$HOME/Desktop}"
 MARKER="$DESKTOP/⚠️ RECAP - CALLS NOT SYNCING.txt"
 
-notify() {  # $1 title, $2 message — best-effort only; never the sole channel
+notify() {  # $1 title, $2 message — transient channel; the Desktop marker is the durable one
   if [ -n "${CBW_NOTIFY:-}" ]; then "$CBW_NOTIFY" "$1" "$2"; return 0; fi
   local t="${1//\\/\\\\}"; t="${t//\"/\\\"}"
   local m="${2//\\/\\\\}"; m="${m//\"/\\\"}"
@@ -166,7 +169,7 @@ else
   fails=$((fails + 1))
   log "UNHEALTHY (#$fails): $reason"
   if [ "$fails" -ge "$FAIL_THRESHOLD" ]; then
-    # Marker first, and every time: it is the channel we can actually rely on, and it must not depend
+    # Marker first, and every time: it is the channel that PERSISTS, and it must not depend
     # on the notifier succeeding or on the renotify debounce.
     write_marker "$reason"
     alerting=1

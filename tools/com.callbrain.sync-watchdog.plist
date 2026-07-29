@@ -18,6 +18,10 @@
 
   15-minute interval + the script's CBW_FAIL_THRESHOLD=2 means a genuine outage surfaces within ~30
   minutes, while a single transient blip stays silent.
+
+  ALERTS ON TWO CHANNELS: a macOS notification (transient — easy to miss, hidden by Focus, gone once
+  dismissed) AND a file on the Desktop that persists until the problem is actually fixed. The pair
+  exists so that missing the banner costs nothing.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
