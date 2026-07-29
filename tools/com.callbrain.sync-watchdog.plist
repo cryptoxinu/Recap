@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Recap corpus-sync WATCHDOG LaunchAgent — REFERENCE COPY.
+  Replace __HOME__ with your home directory, then:
+      cp tools/callbrain-sync-watchdog.sh ~/bin/ && chmod 700 ~/bin/callbrain-sync-watchdog.sh
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.callbrain.sync-watchdog.plist
+
+  WHY THIS IS A SEPARATE AGENT from com.callbrain.corpus-sync:
+  CorpusSyncInstaller.install() rewrites ~/bin/callbrain-corpus-sync.sh unconditionally on every app
+  launch, so an alarm added to that script is silently wiped. Nothing in the app manages this file.
+
+  WHY IT WATCHES THE OUTCOME, NOT AN EXIT CODE:
+  It asks "are the calls actually on the server, and recent?", so one agent catches every cause —
+  Tailscale down, auth lapsed, ssh/rsync broken, export stalled, disk full. An exit-code watcher only
+  catches what the sync script already knows about. (Written after a real incident in which the corpus
+  push failed 982 consecutive times while `launchctl list` still reported exit 0, because that reflects
+  the last attempt rather than the streak.)
+
+  15-minute interval + the script's CBW_FAIL_THRESHOLD=2 means a genuine outage surfaces within ~30
+  minutes, while a single transient blip stays silent.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.callbrain.sync-watchdog</string>
+  <key>ProgramArguments</key>
+  <array><string>__HOME__/bin/callbrain-sync-watchdog.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardOutPath</key><string>/tmp/callbrain-sync-watchdog.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/callbrain-sync-watchdog.err.log</string>
+</dict>
+</plist>
