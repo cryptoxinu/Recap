@@ -89,7 +89,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CallBrainAppCoreTests",
-            dependencies: ["CallBrainAppCore"],
+            dependencies: ["CallBrainAppCore", "CallBrainCore"],   // CallBrainCore: AudioDecoder read-back for the tone self-test
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]
