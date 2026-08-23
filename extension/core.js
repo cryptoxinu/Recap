@@ -1,3 +1,30 @@
+// Recap content-script CORE — site-agnostic caption/mic engine shared by every meeting platform.
+//
+// This file contains ONLY code that is not specific to any one video service: config/storage,
+// postCaption/postMicState, the generic caption parsing (cleanText / isNameLike / parseCaptionRow /
+// boundedUtterance / childTextFragments), the generic locators (locateByAria / locateByHeuristic),
+// the MutationObserver locate→observe→finalize loop, mic scoring, and the auto-captions ticker skeleton.
+//
+// It is loaded FIRST (before a per-host adapter) via a per-host content_scripts entry, so Zoom code
+// never runs on Meet and vice-versa. Core exposes two globals for the adapter that loads after it:
+//   • globalThis.__recapCore — the shared DOM helpers an adapter needs to parse rows.
+//   • globalThis.__recapRun(adapter) — the single entry point; the adapter calls it to start the engine.
+//
+// ── Adapter contract ─────────────────────────────────────────────────────────────────────────────
+//   {
+//     id,                                  // string: "meet" | "zoom" | "teams" — stamped as `source`
+//     matches(loc)?,                       // optional: return false to NOT run in this frame/URL
+//     locateCaptionRegion(),               // return the caption container element, or null
+//     rowsFrom(region) -> [{speaker,text}],// parse one region into per-speaker rows
+//     locateMicButton?(),                  // optional: return the mic-toggle element (else core's generic)
+//     micMuted?(btn),                      // optional: true|false|null for a mic button (else core's generic)
+//     captionsToggle?() -> {button, off},  // optional: the CC toggle + whether captions are currently off
+//     meetingId(),                         // string identity for this meeting (per-meeting auto-CC + T4)
+//   }
+// core.js drives locate→observe→rowsFrom→finalize/dedupe→postCaption. It stamps `ts` (Date.now()) and
+// the T4 fields (source/tab/meetingId) onto every /live and /mic-state POST. The generic fallback
+// (locateByAria → locateByHeuristic, and extractCaptionRows) stays available to every adapter: when an
+// adapter's locateCaptionRegion()/rowsFrom() come up empty, core falls back to the generic path.
 (() => {
   "use strict";
 
@@ -9,10 +36,6 @@
   const CAPTIONS_INACTIVE_MS = 8000;
   const AUTO_CAPTIONS_RETRY_MS = 1500; // active cadence while we still need to enable captions
   const AUTO_CAPTIONS_IDLE_MS = 5000; // slow watch once done — just to catch an SPA meeting change
-  const CAPTIONS_ACTION_LABEL_RE = /\bturn (?:on|off) captions\b/i; // the explicit CC toggle action label
-  const CAPTIONS_OFF_LABEL_RE = /\bturn on captions\b/i; // Meet shows this label only when captions are OFF
-  const CAPTIONS_ICON_RE = /\bclosed_caption(_off)?\b/;  // Material Symbols ligature on icon-only CC buttons
-  const CAPTIONS_LOOKALIKE_RE = /summar|translat|language|setting|option/i; // NEVER click these CC look-alikes
   const MAX_SCAN_ELEMENTS = 1500;
   const MAX_TEXT_LENGTH = 5000;
   const CAPTION_LABEL_RE = /\b(caption|captions|subtitle|subtitles|transcript)\b/i;
@@ -29,25 +52,8 @@
   const INTERACTIVE_SELECTOR =
     "button,a,input,select,textarea,[role='button'],[role='link'],[role='menuitem'],[contenteditable='true']";
 
-  // Google Meet renders live captions as a scrollable region of per-speaker ENTRIES. Each entry
-  // carries an avatar <img>, a short speaker-name node, and the spoken-text node as SEPARATE nodes.
-  // Meet's obfuscated class/jsname values drift, so the durable anchor is that avatar <img>: one per
-  // speaker turn. These region selectors are only a fast hint — refresh them from a live solo Meet
-  // ("New meeting" → CC on → inspect) if Meet changes them; the avatar-anchored structural path below
-  // is what actually keeps this working across DOM churn.
-  // Ordered most-specific → most-general. Every match is still gated (visible, non-interactive, yields
-  // parseable rows) in locateMeetCaptionRegion, so the broad aria-label matches can't grab the wrong
-  // box. The role-agnostic `[aria-label*='aption' i]` future-proofs against Meet dropping/renaming the
-  // ARIA role or churning its obfuscated jsname/class values (the durable signal is the a11y label).
-  const MEET_CAPTION_REGION_SELECTORS = [
-    "[role='region'][aria-label*='aption' i]",
-    "[role='log'][aria-label*='aption' i]",   // Meet sometimes exposes captions as a live log
-    "[aria-label*='aption' i]",               // any labelled element (row-gated below)
-    "div[jsname='dsyhDe']",
-    "div[jsname='YSxPC']",
-    ".a4cQT"
-  ];
-  const MEET_ENTRY_CLIMB_LIMIT = 6;
+  let adapter = null; // set once by __recapRun(adapter); every driver function closes over it
+  let cachedTabId = null; // T4: the owning tab id, fetched once from background.js at start
 
   let config = { port: null, token: null };
   let captionsContainer = null;
@@ -63,7 +69,7 @@
   let micButtonWasFound = false;
   let autoCaptionsEnabled = true; // config-controlled; default on (founder asked for auto-CC)
   let captionsAutoDone = false; // once-per-MEETING: never fight a later manual off
-  let autoCaptionsMeetingId = null; // re-arms auto-CC when the Meet URL changes (SPA meeting switch)
+  let autoCaptionsMeetingId = null; // re-arms auto-CC when the meeting URL changes (SPA meeting switch)
   let autoCaptionsTimer = null;
   let lastMicMutedSent = null;
   let lastSent = new Map();
@@ -158,6 +164,16 @@
 
   const hasUsableConfig = () => Boolean(config.port && config.token);
 
+  // T4: the owning tab id + adapter identity + meeting id + a client timestamp, stamped onto every POST.
+  // The Swift side treats all four as OPTIONAL (back-compat with a legacy nil-tab payload), so this never
+  // breaks an older app; it lets a newer app bind captions to the tab that produced them.
+  const stampFields = () => ({
+    source: adapter ? adapter.id : null,
+    tab: cachedTabId,
+    meetingId: adapter && adapter.meetingId ? adapter.meetingId() : "",
+    ts: Date.now(),
+  });
+
   const postCaption = async ({ speaker, text, final }) => {
     if (!hasUsableConfig() || !speaker || !text) {
       return;
@@ -170,7 +186,7 @@
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.token}`
         },
-        body: JSON.stringify({ speaker, text, final })
+        body: JSON.stringify({ speaker, text, final, ...stampFields() })
       });
     } catch {
       // The Mac app may be closed or on a different port. The side panel reports pairing state.
@@ -189,7 +205,7 @@
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.token}`
         },
-        body: JSON.stringify({ muted }),
+        body: JSON.stringify({ muted, ...stampFields() }),
         keepalive
       });
     } catch {
@@ -404,169 +420,6 @@
     return unique;
   };
 
-  // ── Meet-specific caption parsing (avatar-anchored, one row per speaker turn) ─────────────
-  // This is the primary path for real Google Meet calls and the fix for the merged-wall bug:
-  // instead of flattening a whole container, we find each caption ENTRY by its avatar <img>,
-  // climb to the SMALLEST ancestor that forms a complete name+text entry, and read its distinct
-  // name node vs text node separately.
-
-  // Parse one Meet caption entry into { speaker, text }. The name is the first name-like fragment;
-  // the utterance is the remaining fragments of THIS entry (one speaker turn) joined — an entry is
-  // never bounded, so short lines ("Yes", "Sounds good") survive. A name-only row (participant roster)
-  // yields empty text and is dropped.
-  const parseMeetEntry = (entry) => {
-    if (!isVisibleElement(entry) || isInteractive(entry)) {
-      return null;
-    }
-    const fragments = childTextFragments(entry);
-    if (fragments.length < 2) {
-      return null;
-    }
-    const maxSpeakerIndex = Math.min(2, fragments.length - 1);
-    for (let index = 0; index <= maxSpeakerIndex; index += 1) {
-      const speaker = cleanText(fragments[index]);
-      if (!isNameLike(speaker)) {
-        continue;
-      }
-      const text = cleanText(
-        fragments
-          .slice(index + 1)
-          .filter((fragment) => cleanText(fragment) !== speaker)
-          .join(" ")
-      );
-      if (isPlausibleCaptionText(speaker, text)) {
-        return { speaker, text };
-      }
-    }
-    return null;
-  };
-
-  // Climb from an avatar image to the SMALLEST ancestor that parses as a complete caption entry — so we
-  // never climb up into sibling chrome (a language strip, meeting title). Never crosses into an ancestor
-  // that groups a SECOND avatar (a different speaker's turn); returns null for roster/non-caption avatars.
-  const meetEntryFromAvatar = (img, region) => {
-    let current = img.parentElement;
-    let steps = 0;
-    while (current && current !== region && region.contains(current) && steps <= MEET_ENTRY_CLIMB_LIMIT) {
-      if (parseMeetEntry(current)) {
-        return current;
-      }
-      const parent = current.parentElement;
-      if (!parent || parent === region || !region.contains(parent)) {
-        break;
-      }
-      let parentImgCount;
-      try {
-        parentImgCount = parent.querySelectorAll("img").length;
-      } catch {
-        break;
-      }
-      if (parentImgCount > 1) {
-        break; // parent groups another speaker's avatar — don't merge turns
-      }
-      current = parent;
-      steps += 1;
-    }
-    return null;
-  };
-
-  const meetCaptionEntries = (region) => {
-    if (!region || !isVisibleElement(region)) {
-      return [];
-    }
-    let imgs;
-    try {
-      imgs = Array.from(region.querySelectorAll("img"));
-    } catch {
-      return [];
-    }
-    const entries = [];
-    const seen = new Set();
-    for (const img of imgs) {
-      if (!isVisibleElement(img)) {
-        continue;
-      }
-      const entry = meetEntryFromAvatar(img, region);
-      if (entry && !seen.has(entry)) {
-        seen.add(entry);
-        entries.push(entry);
-      }
-    }
-    return entries;
-  };
-
-  // Avatar-less fallback for the current Google Meet caption UI (the "Summarize captions"-pill variant):
-  // each turn renders as a speaker-name element + a text element with NO per-speaker avatar <img>, so the
-  // avatar-anchored path above finds nothing. We instead locate the SMALLEST containers that parse as a
-  // complete name+text entry. "Smallest" is the key to one-row-per-turn: if a descendant of a candidate
-  // ALSO parses as an entry, this candidate spans more than one turn (or is the whole scroll region), so
-  // we skip it — that's what prevents the two speakers' words merging into a single wall.
-  const meetRowsWithoutAvatar = (region) => {
-    if (!region || !isVisibleElement(region)) {
-      return [];
-    }
-    let candidates;
-    try {
-      candidates = Array.from(region.querySelectorAll("div,li,section,p")).slice(0, MAX_SCAN_ELEMENTS);
-    } catch {
-      return [];
-    }
-    const minimalEntries = [];
-    const seen = new Set();
-    for (const candidate of candidates) {
-      if (!isVisibleElement(candidate) || isInteractive(candidate) || !parseMeetEntry(candidate)) {
-        continue;
-      }
-      let hasParsingDescendant = false;
-      try {
-        for (const inner of candidate.querySelectorAll("div,li,section,p")) {
-          if (inner !== candidate && isVisibleElement(inner) && !isInteractive(inner) && parseMeetEntry(inner)) {
-            hasParsingDescendant = true;
-            break;
-          }
-        }
-      } catch {
-        // Treat as minimal if we can't inspect descendants.
-      }
-      if (hasParsingDescendant || seen.has(candidate)) {
-        continue;
-      }
-      seen.add(candidate);
-      minimalEntries.push(candidate);
-    }
-    return uniqueRows(minimalEntries.map(parseMeetEntry).filter(Boolean));
-  };
-
-  const meetRowsFrom = (root) => {
-    // Primary: avatar-anchored entries (one <img> per speaker turn). Fallback: the avatar-less name+text
-    // layout. Both keep turns separate; whichever yields rows wins so we never regress the avatar path.
-    const entries = meetCaptionEntries(root);
-    const avatarRows = uniqueRows(entries.map(parseMeetEntry).filter(Boolean));
-    if (avatarRows.length > 0) {
-      return avatarRows;
-    }
-    return meetRowsWithoutAvatar(root);
-  };
-
-  // Try Meet's real caption region first. Evaluate EVERY visible match of each selector (not just the
-  // first) so a caption-settings region that matches earlier can't shadow the actual transcript region.
-  const locateMeetCaptionRegion = () => {
-    for (const selector of MEET_CAPTION_REGION_SELECTORS) {
-      let nodes;
-      try {
-        nodes = document.querySelectorAll(selector);
-      } catch {
-        continue;
-      }
-      for (const region of nodes) {
-        if (isVisibleElement(region) && !isInteractive(region) && meetRowsFrom(region).length > 0) {
-          return region;
-        }
-      }
-    }
-    return null;
-  };
-
   const rowCandidatesFromSurface = (surface) => {
     const roleRows = Array.from(surface.querySelectorAll("[role='listitem'],[role='row']"));
     if (roleRows.length > 0) {
@@ -606,12 +459,12 @@
   };
 
   const scanForRows = (surface) => {
-    // Prefer Meet's structured per-entry parse (avatar-anchored → one row per speaker turn). This is
-    // what prevents the whole-region-flattened "merged wall"; the generic extract is the fallback for
-    // non-Meet / avatar-less layouts.
-    const meetRows = meetRowsFrom(surface);
-    if (meetRows.length > 0) {
-      return meetRows;
+    // Prefer the adapter's structured per-entry parse (e.g. Meet avatar-anchored → one row per speaker
+    // turn). This is what prevents the whole-region-flattened "merged wall"; the generic extract is the
+    // fallback for layouts the adapter can't parse.
+    const adapterRows = adapter.rowsFrom(surface);
+    if (adapterRows.length > 0) {
+      return adapterRows;
     }
 
     const rows = extractCaptionRows(surface);
@@ -783,6 +636,13 @@
     }
   };
 
+  // Adapter-aware mic seams: prefer an adapter-provided locator/reader (e.g. Teams data-tid selectors),
+  // else fall back to core's generic label/attribute scoring above.
+  const adapterLocateMicButton = () =>
+    adapter && adapter.locateMicButton ? adapter.locateMicButton() : locateMicButton();
+  const adapterMicMuted = (button) =>
+    adapter && adapter.micMuted ? adapter.micMuted(button) : micMutedFromButton(button);
+
   const hasConnectedMicButton = () =>
     Boolean(micButton && document.documentElement.contains(micButton) && isVisibleElement(micButton));
 
@@ -820,12 +680,12 @@
         return;
       }
 
-      const muted = micMutedFromButton(micButton);
+      const muted = adapterMicMuted(micButton);
       if (typeof muted === "boolean") {
         sendMicStateIfChanged(muted);
       }
     } catch {
-      // Never throw into the Meet page; a later locate pass can recover.
+      // Never throw into the page; a later locate pass can recover.
     }
   };
 
@@ -876,7 +736,7 @@
         return;
       }
 
-      const button = locateMicButton();
+      const button = adapterLocateMicButton();
       if (button) {
         observeMicButton(button);
         return;
@@ -894,89 +754,21 @@
     micLocateTimer = window.setTimeout(locateAndObserveMic, delay);
   };
 
-  // ── Auto-enable Google Meet captions (A2) ─────────────────────────────────────────────────
-  // The founder had to turn on CC manually for the relay to work. When Recap is paired and the
-  // in-call captions toggle is present, click it once if captions are OFF. The button's accessible
-  // label describes the ACTION: "Turn on captions" ⇒ currently off. We act at most once per meeting so
-  // we never fight a user who deliberately turns captions back off.
-  // Read the CC toggle's on/off state from a Material Symbols icon ligature ("closed_caption" /
-  // "closed_caption_off") plus aria-pressed — for Meet builds whose CC button carries no text label.
-  // Returns true (captions off), false (on), or null when this button isn't the captions toggle.
-  const captionsIconOffState = (button) => {
-    const iconText = Array.from(button.querySelectorAll("i,span"))
-      .map((node) => cleanText(node.textContent || ""))
-      .find((text) => CAPTIONS_ICON_RE.test(text));
-    if (!iconText) return null;
-    const pressed = button.getAttribute("aria-pressed");
-    if (pressed === "true") return false;
-    if (pressed === "false") return true;
-    return /_off\b/.test(iconText); // no pressed state — the "_off" icon variant means captions are off
-  };
-
-  const locateCaptionsToggle = () => {
-    try {
-      const candidates = Array.from(
-        document.querySelectorAll("button,[role='button']")
-      ).slice(0, MAX_SCAN_ELEMENTS);
-
-      let iconFallback = null;
-      for (const candidate of candidates) {
-        const button = candidate.matches?.("button,[role='button']")
-          ? candidate
-          : candidate.closest?.("button,[role='button']");
-        if (!button || !isVisibleElement(button)) {
-          continue;
-        }
-
-        const label = elementLabelText(button);
-        // Highest confidence: the explicit "Turn on/off captions" action label wins outright.
-        if (CAPTIONS_ACTION_LABEL_RE.test(label)) {
-          return { button, off: CAPTIONS_OFF_LABEL_RE.test(label) };
-        }
-        // Fallback for icon-only CC buttons — remember the first, but keep scanning so a later
-        // explicit-label button still wins. Skip Summarize/language/settings look-alikes — and test the
-        // button's TEXT CONTENT too, not just the accessible label: a look-alike like "Summarize captions"
-        // can derive its name from native child text that elementLabelText() doesn't read (Codex P2).
-        if (!iconFallback) {
-          const exclusionText = `${label} ${cleanText(button.textContent || "")}`;
-          if (!CAPTIONS_LOOKALIKE_RE.test(exclusionText)) {
-            const iconOff = captionsIconOffState(button);
-            if (iconOff !== null) {
-              iconFallback = { button, off: iconOff };
-            }
-          }
-        }
-      }
-      return iconFallback;
-    } catch {
-      // Never throw into the Meet page; a later attempt can recover.
-    }
-
-    return null;
-  };
-
-  // Meet call URLs look like /abc-defg-hij; the whole pathname is a stable per-meeting identity.
-  const meetingIdFromLocation = () => {
-    try {
-      return location.pathname || "";
-    } catch {
-      return "";
-    }
-  };
-
-  // A single self-rescheduling ticker (never a give-up cap): it re-arms auto-CC when the meeting URL
-  // changes (SPA switch to a new call), enables captions once when paired + the toggle appears (even if
-  // the toolbar mounts long after join), then idles cheaply just to watch for the next meeting change.
+  // ── Auto-enable captions ───────────────────────────────────────────────────────────────────────
+  // The founder shouldn't have to turn on CC manually for the relay to work. When Recap is paired and the
+  // adapter can find the in-call captions toggle, click it once if captions are OFF. We act at most once
+  // per meeting so we never fight a user who deliberately turns captions back off. The platform-specific
+  // toggle detection lives in the adapter (captionsToggle); this is only the generic ticker skeleton.
   const autoCaptionsTick = () => {
     try {
-      const meetingId = meetingIdFromLocation();
+      const meetingId = adapter && adapter.meetingId ? adapter.meetingId() : "";
       if (meetingId !== autoCaptionsMeetingId) {
         autoCaptionsMeetingId = meetingId;
         captionsAutoDone = false; // new meeting — enable captions again (but only once for it)
       }
 
-      if (!captionsAutoDone && autoCaptionsEnabled && hasUsableConfig()) {
-        const toggle = locateCaptionsToggle();
+      if (!captionsAutoDone && autoCaptionsEnabled && hasUsableConfig() && adapter && adapter.captionsToggle) {
+        const toggle = adapter.captionsToggle();
         if (toggle) {
           if (toggle.off) {
             toggle.button.click();
@@ -986,7 +778,7 @@
         }
       }
     } catch {
-      // never throw into the Meet page
+      // never throw into the page
     }
 
     scheduleAutoCaptions(captionsAutoDone ? AUTO_CAPTIONS_IDLE_MS : AUTO_CAPTIONS_RETRY_MS);
@@ -1016,9 +808,10 @@
         continue;
       }
 
-      // Meet-aware even in the deepest fallback: if the region selectors have all drifted but avatar-
-      // anchored entries still exist, recover via the structural path; otherwise the generic extract.
-      let rows = candidate.querySelector("img") ? meetRowsFrom(candidate) : [];
+      // Adapter-aware even in the deepest fallback: if the region selectors have all drifted but the
+      // adapter can still recover structured rows (e.g. Meet avatar-anchored entries), use them; otherwise
+      // the generic extract.
+      let rows = candidate.querySelector("img") ? adapter.rowsFrom(candidate) : [];
       if (rows.length === 0) {
         rows = extractCaptionRows(candidate);
       }
@@ -1040,9 +833,10 @@
     return best?.element || null;
   };
 
-  // Prefer Meet's real caption region (tight, excludes the roster + language chrome) so we observe
-  // the right subtree and never sweep participant names / "Live captions" UI into the transcript.
-  const locateCaptionsContainer = () => locateMeetCaptionRegion() || locateByAria() || locateByHeuristic();
+  // Prefer the adapter's real caption region (tight, excludes roster + chrome) so we observe the right
+  // subtree; then the generic aria/heuristic locators as universal fallbacks for every adapter.
+  const locateCaptionsContainer = () =>
+    adapter.locateCaptionRegion() || locateByAria() || locateByHeuristic();
 
   const hasConnectedCaptionContainer = () =>
     Boolean(
@@ -1195,6 +989,23 @@
     }
   };
 
+  // T4: ask background.js for THIS content script's owning tab id (sender.tab.id). Cached once at start
+  // and stamped onto every /live + /mic-state POST so the app can bind captions to the right meeting tab.
+  const fetchTabId = () =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "recap-tab-id" }, (resp) => {
+          if (safeRuntimeError()) {
+            resolve(null);
+            return;
+          }
+          resolve(resp && Number.isInteger(resp.tabId) ? resp.tabId : null);
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+
   const shutdown = () => {
     markMicButtonMissing({ keepalive: true });
     window.clearTimeout(locateTimer);
@@ -1210,12 +1021,43 @@
   const start = async () => {
     installStorageListener();
     await refreshConfig();
+    cachedTabId = await fetchTabId(); // T4: resolve the owning tab once before we start posting
     scheduleCaptionsInactive();
     scheduleLocate(0);
     scheduleMicLocate(0);
     kickAutoCaptions();
   };
 
-  window.addEventListener("pagehide", shutdown, { once: true });
-  void start();
+  // Shared DOM helpers exposed to the per-host adapter that loads after this file. An adapter's rowsFrom /
+  // locateCaptionRegion / captionsToggle reuse these instead of re-implementing them.
+  globalThis.__recapCore = {
+    cleanText,
+    isVisibleElement,
+    isInteractive,
+    isNameLike,
+    isPlausibleCaptionText,
+    childTextFragments,
+    visibleElementChildren,
+    uniqueRows,
+    parseCaptionRow,
+    elementLabelText,
+    isCaptionLabelled,
+    isPotentialCaptionSurface,
+    MAX_SCAN_ELEMENTS,
+    MAX_TEXT_LENGTH,
+  };
+
+  // The single entry point. The per-host adapter calls this with its adapter object to start the engine.
+  // Runs at most once per frame; honours an optional adapter.matches(location) guard.
+  globalThis.__recapRun = (nextAdapter) => {
+    if (adapter || !nextAdapter) {
+      return;
+    }
+    if (typeof nextAdapter.matches === "function" && !nextAdapter.matches(location)) {
+      return;
+    }
+    adapter = nextAdapter;
+    window.addEventListener("pagehide", shutdown, { once: true });
+    void start();
+  };
 })();
