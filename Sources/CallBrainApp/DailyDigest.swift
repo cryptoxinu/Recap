@@ -96,7 +96,7 @@ enum DailyDigest {
         req.httpMethod = "POST"
         req.timeoutInterval = 20
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "model": "qwen2.5:3b", "prompt": prompt, "stream": false, "keep_alive": "60s",
+            "model": "qwen3:4b-instruct-2507-q4_K_M", "prompt": prompt, "stream": false, "keep_alive": "60s",
             "options": ["temperature": 0.2, "num_predict": 120],
         ])
         guard let (data, resp) = try? await URLSession.shared.data(for: req),

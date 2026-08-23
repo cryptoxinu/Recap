@@ -9,7 +9,7 @@ public struct QueryRewriter: Sendable {
     public let baseURL: URL
     public let timeout: TimeInterval
 
-    public init(model: String = "qwen2.5:3b",
+    public init(model: String = "qwen3:4b-instruct-2507-q4_K_M",
                 baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
                 timeout: TimeInterval = 3) {
         self.model = model; self.baseURL = baseURL; self.timeout = timeout

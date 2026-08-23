@@ -3,7 +3,7 @@ import Foundation
 /// The INSTANT lane for the in-call assistant (dual-answer spec P1).
 ///
 /// Talks to the persistent local Ollama server (`127.0.0.1:11434`) which keeps a small model
-/// (`qwen2.5:3b`) resident in unified memory — so answers stream in with NO process spawn, NO auth,
+/// (`qwen3:4b-instruct-2507-q4_K_M`) resident in unified memory — so answers stream in with NO process spawn, NO auth,
 /// NO network egress. That is the whole point: the CLI "smart" lane cold-spawns `claude -p` (2–6s);
 /// this warm local lane yields a first token in tens of ms.
 ///
@@ -31,7 +31,7 @@ public struct OllamaLiveProvider: LLMProvider {
     /// production. `@unchecked Sendable`-safe because it's an immutable array of metatypes.
     private let extraProtocolClasses: [AnyClass]
 
-    public init(model: String = "qwen2.5:3b",
+    public init(model: String = "qwen3:4b-instruct-2507-q4_K_M",
                 baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
                 numCtx: Int = 4096, numPredict: Int = 220,
                 temperature: Double = 0.2, keepAlive: String = "2m",
