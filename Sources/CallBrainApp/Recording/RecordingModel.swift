@@ -120,7 +120,7 @@ final class RecordingModel {
             // silently fail on a recording (founder: kick on by itself in case I left it off). Fire-and-forget
             // — audio capture doesn't wait on it; the assistant's retry loop connects once it's up (~2s).
             Task.detached { await SystemStatus.ensureRunning() }
-            try await capture.start()
+            try await capture.start(checkpointTitle: title)
             // Capturing the OTHER participants ("Call audio") needs Screen Recording. If it isn't granted yet,
             // keep recording your mic but surface a ONE-TAP fix — the on-device live transcript still works for
             // what your mic hears, and enabling Screen Recording captures the whole call next time. (The native

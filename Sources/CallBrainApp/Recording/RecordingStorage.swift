@@ -101,6 +101,14 @@ enum RecordingStorage {
             guard !protectedStems.contains(stem) else { continue }
             try? fm.removeItem(at: resolved)
         }
+        // Sweep the crash-recovery checkpoint subtree (W1b). It's redundant once the main WAVs exist, and
+        // clearing recordings should reclaim it too. Confined to the resolved recordings root, fail-closed.
+        let checkpoints = directory().resolvingSymlinksInPath()
+            .appendingPathComponent(".checkpoints", isDirectory: true)
+            .resolvingSymlinksInPath().standardizedFileURL
+        if checkpoints.path.hasPrefix(root.hasSuffix("/") ? root : root + "/") {
+            try? fm.removeItem(at: checkpoints)
+        }
         return deleted
     }
 }

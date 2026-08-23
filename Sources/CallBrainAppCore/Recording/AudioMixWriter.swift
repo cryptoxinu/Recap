@@ -40,6 +40,17 @@ public final class AudioMixWriter: @unchecked Sendable {
     private let onLevel: @Sendable (Float) -> Void
     public let url: URL
 
+    // Crash-proof checkpoint tee (W1b). Invoked at the END of every `flush(upTo:)` with EXACTLY the
+    // clamped Int16 frames just written to the main WAV, so a `RecordingCheckpointWriter` can persist
+    // rolling segments. Backed on the writer queue: `flush` (always on `q`) reads `_onFlushedFrames`
+    // directly; external callers set it via the public accessor (a brief `q.sync`) before ingest
+    // begins, so there is no data race and the mix path is untouched when it's nil.
+    private var _onFlushedFrames: (@Sendable ([Int16]) -> Void)?
+    public var onFlushedFrames: (@Sendable ([Int16]) -> Void)? {
+        get { q.sync { _onFlushedFrames } }
+        set { q.sync { _onFlushedFrames = newValue } }
+    }
+
     // Mix accumulator. `acc[i]` holds absolute frame (accBase + i), summed in Int32 so two Int16
     // streams add without mid-mix clipping (clamped to Int16 only on flush). Bounded by a ~1s
     // flush window: anything older than the newest frame minus the window can't still be waiting
@@ -239,7 +250,10 @@ public final class AudioMixWriter: @unchecked Sendable {
     private func flush(upTo absFrame: Int64) {
         let count = min(Int(absFrame - accBase), acc.count)
         guard count > 0, let file else { return }
-        if !write(Array(acc[0..<count]), to: file) { writeFailed = true }
+        // The exact Int32 mix window the main WAV receives — captured before `removeFirst` so the
+        // checkpoint tee below can clamp the SAME buffer to Int16 (parity with what the WAV got).
+        let mixedInt32 = Array(acc[0..<count])
+        if !write(mixedInt32, to: file) { writeFailed = true }
         if let systemFile {
             // If the system write fails (or the accumulators ever desync), ABANDON the sidecar: drop the
             // file + buffer so we never advance the shared timeline for the mixed WAV while the sidecar
@@ -255,6 +269,13 @@ public final class AudioMixWriter: @unchecked Sendable {
         }
         acc.removeFirst(count)
         accBase += Int64(count)
+        // Tee the EXACT clamped Int16 frames the main WAV received to the checkpoint (W1b). One
+        // non-blocking closure call — the checkpoint writer's own queue absorbs the I/O — and zero
+        // overhead (no clamp, no call) when no checkpoint is wired. Runs on `q`, so it reads the
+        // backing store directly.
+        if let onFlushedFrames = _onFlushedFrames {
+            onFlushedFrames(mixedInt32.map { Int16(clamping: $0) })
+        }
     }
 
     /// Drain the converter tail + write everything still buffered, then close the file.
