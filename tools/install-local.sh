@@ -33,7 +33,22 @@ echo "  build stamp: $STAMP"
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
 # SPM resource bundles (e.g. the app-icon PNG) must travel inside the .app to be self-contained.
-find "$ROOT/.build/release" -maxdepth 1 -name "*.bundle" -exec cp -R {} "$APP/Contents/Resources/" \;
+# NOTE: .build/release is a SYMLINK to .build/<arch>/release, and `find` does not descend into a
+# symlinked start path. A bare `find "$ROOT/.build/release" ...` therefore matches ZERO bundles and
+# still exits 0 — shipping an app that traps in Bundle.module the instant it launches. Resolve the
+# symlink first, then hard-fail on zero rather than installing a guaranteed-crashing app.
+BUILD_DIR="$(cd -P "$ROOT/.build/release" && pwd)"
+BUNDLE_COUNT=0
+while IFS= read -r -d '' bundle; do
+  cp -R "$bundle" "$APP/Contents/Resources/"
+  BUNDLE_COUNT=$((BUNDLE_COUNT + 1))
+done < <(find "$BUILD_DIR" -maxdepth 1 -name "*.bundle" -print0)
+if [ "$BUNDLE_COUNT" -eq 0 ]; then
+  echo "✗ no SPM resource bundles found in $BUILD_DIR" >&2
+  echo "  Installing would produce an app that crashes at launch (Bundle.module assertion)." >&2
+  exit 1
+fi
+echo "  bundled $BUNDLE_COUNT SPM resource bundle(s)"
 
 echo "▸ codesign (Developer ID when available — stable TCC identity; ad-hoc fallback)"
 SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Developer ID Application/ {print $2; exit}')"

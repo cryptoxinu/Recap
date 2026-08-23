@@ -32,7 +32,22 @@ cp "$ROOT/tools/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
 # SPM resource bundles (e.g. the app icon PNG) must travel inside the .app to be self-contained.
-find "$ROOT/.build/release" -maxdepth 1 -name "*.bundle" -exec cp -R {} "$APP/Contents/Resources/" \;
+# NOTE: .build/release is a SYMLINK to .build/<arch>/release, and `find` does not descend into a
+# symlinked start path. A bare `find "$ROOT/.build/release" ...` therefore matches ZERO bundles and
+# still exits 0 — producing a signed, notarized DMG whose app traps in Bundle.module at launch.
+# Resolve the symlink first, then hard-fail on zero rather than notarizing a crashing app.
+BUILD_DIR="$(cd -P "$ROOT/.build/release" && pwd)"
+BUNDLE_COUNT=0
+while IFS= read -r -d '' bundle; do
+  cp -R "$bundle" "$APP/Contents/Resources/"
+  BUNDLE_COUNT=$((BUNDLE_COUNT + 1))
+done < <(find "$BUILD_DIR" -maxdepth 1 -name "*.bundle" -print0)
+if [ "$BUNDLE_COUNT" -eq 0 ]; then
+  echo "✗ no SPM resource bundles found in $BUILD_DIR" >&2
+  echo "  Refusing to sign/notarize an app that would crash at launch (Bundle.module assertion)." >&2
+  exit 1
+fi
+echo "  bundled $BUNDLE_COUNT SPM resource bundle(s)"
 
 echo "▸ codesign (Hardened Runtime, leaf-first: any embedded dylibs/frameworks before the app)"
 find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.framework" \) -print0 2>/dev/null \
