@@ -55,6 +55,12 @@ final class AudioCapture {
                                              channels: 1, interleaved: true)!
     private let liveObserverQueue = DispatchQueue(label: "callbrain.rec.live-observer", qos: .utility)
     private var writer: AudioMixWriter?
+    /// Crash-proof checkpoint tee (W1b): rolling ~30 s WAV segments so a kill mid-recording can be
+    /// recovered at launch. Additive — nil-safe, never alters the recording path.
+    private var checkpoint: RecordingCheckpointWriter?
+    /// The checkpoint directory name (== mix stem uuid) of the RUNNING recording, so launch recovery
+    /// can exclude a live recording's own dir. nil whenever not recording.
+    private(set) var activeCheckpointID: String?
     private var systemAudio: SystemAudioCapture?
     private var systemAudioReceivedSamples = false
     private var systemAudioWatchdog: Task<Void, Never>?
@@ -72,7 +78,10 @@ final class AudioCapture {
         return await AVCaptureDevice.requestAccess(for: .audio)
     }
 
-    func start() async throws {
+    /// - Parameter checkpointTitle: the founder's chosen title (if any) at start, stored in the crash
+    ///   checkpoint manifest so a recovered recording is named well. Empty is fine (recovery falls back
+    ///   to a timestamped default). Additive — default preserves the existing call shape.
+    func start(checkpointTitle: String = "") async throws {
         guard !isRecording else { return }
         guard await Self.requestMic() else { throw CaptureError.micDenied }
 
@@ -119,6 +128,23 @@ final class AudioCapture {
         writer = w
         w.setForceMuted(meetMuted)
 
+        // Crash-proof checkpoints (W1b): tee the SAME already-mixed Int16 frames the main WAV gets
+        // into rolling ~30 s segments under Recordings/.checkpoints/<mix-stem>/. The tee is a single
+        // non-blocking `append` (its own serial queue absorbs I/O) so the mix queue never stalls. On a
+        // clean stop the segments are redundant and deleted; a kill mid-call leaves them for recovery.
+        let recordingID = mixURL.deletingPathExtension().lastPathComponent
+        let ckpt = RecordingCheckpointWriter(
+            checkpointsRoot: RecordingStorage.directory().appendingPathComponent(".checkpoints", isDirectory: true),
+            recordingID: recordingID,
+            title: checkpointTitle,
+            startedAt: Date(),
+            sampleRate: 16_000,
+            now: Date()
+        )
+        checkpoint = ckpt
+        activeCheckpointID = recordingID
+        w.onFlushedFrames = { [ckpt] frames in ckpt.append(frames) }
+
         // The tap runs on the audio thread: it only extracts channel-0 floats + a monotonic
         // timestamp and hands them to the writer queue. No conversion, no file I/O, no lock here.
         // MUST be @Sendable: `start()` is @MainActor, so an un-annotated tap closure inherits
@@ -137,6 +163,7 @@ final class AudioCapture {
         catch {
             input.removeTap(onBus: 0)
             writer = nil
+            checkpoint?.finishClean(); checkpoint = nil; activeCheckpointID = nil   // no recording → drop the empty dir
             micState = .off
             systemAudioState = .off
             throw CaptureError.engineFailed(error.localizedDescription)
@@ -170,6 +197,10 @@ final class AudioCapture {
         systemAudio = nil
         isRecording = false; level = 0; micState = .off; startedAt = nil; systemAudioState = .off
         let url = writer?.close()
+        // Clean stop → the main WAV is authoritative, so the checkpoint segments are redundant. Drain
+        // the final tee'd append (close() fired one last flush) then delete the whole dir. Ordering:
+        // close() BEFORE finishClean() so the final append is enqueued before finishClean's barrier.
+        checkpoint?.finishClean(); checkpoint = nil; activeCheckpointID = nil
         lastRecordingIncomplete = writer?.writeFailed ?? false
         lastSystemAudioWarning = SystemAudioHealth.stopWarning(
             includeSystemAudio: includeSystemAudio,
