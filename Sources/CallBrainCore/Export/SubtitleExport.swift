@@ -166,7 +166,11 @@ public enum SubtitleExport {
                 out.unicodeScalars.append(u)
             }
         }
-        let collapsed = out.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        let collapsed = out
+            .replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+            // WebVTT forbids "-->" anywhere in a cue payload — a conforming parser treats it as a cue
+            // boundary and DROPS the caption; SRT's cue timing uses it too. Neutralize it to a real arrow.
+            .replacingOccurrences(of: "-->", with: "→")
         return collapsed.trimmingCharacters(in: .whitespaces)
     }
 

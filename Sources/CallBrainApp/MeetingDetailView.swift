@@ -325,7 +325,12 @@ struct MeetingDetailView: View {
         let ext = format == .srt ? "srt" : "vtt"
         Task {
             let content = await Task.detached { () -> String? in
-                let rows = (try? store.utterances(meetingID: id)) ?? []
+                // Exclude Gemini-notes pseudo-turns (speaker == "Gemini Notes"): on a MERGED
+                // recording+notes call store.utterances returns BOTH the timed dialogue AND the notes
+                // rows (tStart == 0), which would export as bogus 00:00 cues interleaved with the real
+                // dialogue. Mirror the Transcript-tab filter (buildSnapshot) so subtitles == what's shown.
+                let rows = ((try? store.utterances(meetingID: id)) ?? [])
+                    .filter { $0.speaker != GeminiNotesParser.pseudoSpeaker }
                 guard !rows.isEmpty else { return nil }
                 var carried = 0.0
                 let utterances = rows.map { row -> SubtitleExport.SubtitleUtterance in

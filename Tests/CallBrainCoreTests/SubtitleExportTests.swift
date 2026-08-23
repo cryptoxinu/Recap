@@ -33,6 +33,17 @@ struct SubtitleExportTests {
         #expect(abs(cues[2].end - 6.2) < 1e-9)
     }
 
+    @Test("a caption containing \"-->\" is neutralized so it can't corrupt a WebVTT cue")
+    func arrowNeutralizedInPayload() {
+        let u = [U(start: 0, speaker: nil, text: "we went from A --> B")]
+        let vtt = SubtitleExport.subtitles(from: u, format: .vtt)
+        #expect(vtt.contains("we went from A → B"))   // arrow replaced in the payload
+        #expect(!vtt.contains("A --> B"))              // the forbidden "-->" sequence is gone from the payload
+        let srt = SubtitleExport.subtitles(from: u, format: .srt)
+        #expect(srt.contains("we went from A → B"))
+        #expect(!srt.contains("A --> B"))
+    }
+
     @Test("VTT has the WEBVTT header and dot-millis (no commas in timings)")
     func vttExact() {
         let vtt = SubtitleExport.subtitles(from: three, format: .vtt)
