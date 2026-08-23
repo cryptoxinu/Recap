@@ -48,6 +48,10 @@ final class RecordingModel {
     /// panel opened-then-dismissed (or a capture failure) can't leave a stale link on the shared
     /// model for the next manual recording to inherit (P3 audit HIGH).
     private(set) var linkedEventID: String?
+    /// Was THIS recording started by auto-record (W1d), vs. the founder pressing record? Guarded
+    /// stop-on-leave will ONLY ever stop an auto-started recording — a manual recording is the
+    /// founder's to stop. Set when a recording actually begins; cleared on every stop / failed start.
+    private(set) var wasAutoStarted = false
     /// The INTENDED link, set by the calendar / auto-record flows before Start. Cleared on dismiss.
     var pendingEventID: String?
     /// The wall-clock instant this recording actually began — captured once capture starts, carried
@@ -77,7 +81,7 @@ final class RecordingModel {
     func startAuto(env: AppEnvironment, title: String, eventID: String) async {
         guard phase == .idle else { return }
         pendingEventID = eventID
-        await start(env: env, presetTitle: title)
+        await start(env: env, presetTitle: title, autoStarted: true)
     }
 
     /// Clear the calendar preset when the panel is dismissed without recording (P3 audit HIGH —
@@ -90,7 +94,7 @@ final class RecordingModel {
         title = ""; pendingEventID = nil
     }
 
-    func start(env: AppEnvironment, presetTitle: String? = nil) async {
+    func start(env: AppEnvironment, presetTitle: String? = nil, autoStarted: Bool = false) async {
         guard phase == .idle, !starting else { return }
         starting = true
         defer { starting = false }
@@ -172,6 +176,7 @@ final class RecordingModel {
             notes.start()
             self.notes = notes
             phase = .recording
+            wasAutoStarted = autoStarted   // W1d: only an auto-started recording may be auto-stopped
             startedAt = began   // real call start (stamped pre-capture) — threaded to meetings.start_time
             elapsed = 0
             liveCaptions = []
@@ -195,6 +200,7 @@ final class RecordingModel {
             if case AudioCapture.CaptureError.micDenied = error { permissionIssue = .microphone }
             phase = .idle
             linkedEventID = nil   // capture failed → don't strand a link for the next recording
+            wasAutoStarted = false   // …nor a stale auto-started flag for the next (manual) recording
         }
     }
 
@@ -326,6 +332,7 @@ final class RecordingModel {
         // Reset for the next recording (linkedEventID + pendingEventID + startedAt too — else a later
         // manual recording would inherit a stale event link / start time, P1 audit MED / P3 audit HIGH).
         title = ""; liveNotes = ""; elapsed = 0; linkedEventID = nil; pendingEventID = nil; startedAt = nil
+        wasAutoStarted = false   // the next recording is manual unless auto-record starts it
         live = nil; assistant = nil; notes = nil; liveCaptions = []
         phase = .idle
         return queued.first
