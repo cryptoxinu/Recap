@@ -22,8 +22,10 @@ final class CoreAudioProcessTap: @unchecked Sendable {
         var description: String { "CoreAudioProcessTap.\(step) failed (OSStatus \(status))" }
     }
 
-    /// Called on `ioQueue` (RT thread) with a copy of the tap's f32 mono frames + capture ns. MUST be
-    /// cheap on the caller side — downsampling/I/O happens off this queue in `CoreAudioTapCapture`.
+    /// Dispatched on `ioQueue` — a serial high-QoS GCD queue, NOT the HAL render thread (we pass a
+    /// non-nil queue to `AudioDeviceCreateIOProcIDWithBlock`, so the block is dispatched there rather
+    /// than invoked directly on Core Audio's own thread) — with a copy of the tap's f32 mono frames +
+    /// capture ns. Still keep it cheap: downsampling/I/O happens off this queue in `CoreAudioTapCapture`.
     private let onRawFrames: @Sendable ([Float], UInt64) -> Void
     /// Called on `lifecycleQueue` when the tap's stream format changes mid-capture (so the downsampler
     /// can rebuild its converter). Never called from the RT thread.
@@ -55,6 +57,14 @@ final class CoreAudioProcessTap: @unchecked Sendable {
     /// any partial setup so nothing leaks.
     func start() throws -> AudioStreamBasicDescription {
         try lifecycleQueue.sync {
+            // Defense-in-depth: unlike stop(), start() overwrites tapID/aggregateID/procID. If it were
+            // ever called twice without an intervening stop() (e.g. a future retry loop), the first tap +
+            // aggregate device would be orphaned in the HAL. Tear down any prior chain first so nothing leaks.
+            if tapID != AudioObjectID(kAudioObjectUnknown)
+                || aggregateID != AudioObjectID(kAudioObjectUnknown)
+                || procID != nil {
+                teardownAllLocked()
+            }
             torndown = false
             do {
                 let asbd = try buildTapLocked()
@@ -87,7 +97,10 @@ final class CoreAudioProcessTap: @unchecked Sendable {
         desc.uuid = UUID()
         desc.muteBehavior = .unmuted     // never mute the user's own playback while we tap it.
         desc.isPrivate = true            // don't publish the tap to other apps.
-        desc.isExclusive = false         // global (exclude-list) semantics.
+        // Do NOT touch `isExclusive`: `monoGlobalTapButExcludeProcesses:` already sets it TRUE, which per
+        // CATapDescription.h means "tap ALL processes EXCEPT those listed" (exclude-list = the whole system
+        // minus CallBrain). Forcing it false would flip to include-ONLY-listed semantics → the tap would
+        // capture only CallBrain's own output (silence), never the remote party. (Bug fix: W1a review.)
         tapUUIDString = desc.uuid.uuidString
 
         var newTap = AudioObjectID(kAudioObjectUnknown)
