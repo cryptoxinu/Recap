@@ -47,7 +47,7 @@ struct CorpusSyncInstallerTests {
         #expect(CorpusSyncInstaller.isSafeDest("sub/dir_1.2"))
         // Host MUST be a Tailscale MagicDNS name — the relay is Tailscale-only (review finding 4).
         #expect(CorpusSyncInstaller.isSafeHost("test-mac.tailnet0.ts.net"))
-        #expect(CorpusSyncInstaller.isSafeHost("host.tail36b615.ts.net"))
+        #expect(CorpusSyncInstaller.isSafeHost("host.tailnet1.ts.net"))
         // Unsafe dest → would let --delete escape the intended dir (incl. leading '-')
         for bad in ["", "/", "/etc", "~", "~/x", ".", "..", "../up", "a/../b", "a b", "a;rm -rf", "a$(x)", "a`x`", "a\nb", "-rf"] {
             #expect(!CorpusSyncInstaller.isSafeDest(bad), "\(bad) should be rejected")
