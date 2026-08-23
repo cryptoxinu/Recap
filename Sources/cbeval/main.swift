@@ -254,7 +254,7 @@ if let target = summarizeMeeting {
         guard !text.isEmpty else { FileHandle.standardError.write(Data("cbeval: no transcript\n".utf8)); exit(1) }
         print("== \(m.displayTitle) · \(m.date) · \(text.count) chars ==\n")
         let summarizer = OllamaSummarizer(
-            model: UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:3b",
+            model: ProcessInfo.processInfo.environment["CBEVAL_SUMMARY_MODEL"] ?? UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen3:4b-instruct-2507-q4_K_M",
             profile: PersonalProfile.load())
         let t0 = Date()
         guard let r = await summarizer.summarize(transcript: text, title: m.displayTitle) else {

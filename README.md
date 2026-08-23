@@ -72,7 +72,7 @@ keychain profile, and a Sparkle EdDSA key), use `tools/package.sh`, which produc
 
 ```bash
 # Install Ollama from https://ollama.com, then pull the two models Recap uses:
-ollama pull qwen2.5:3b          # on-device call summaries (fast, JSON-reliable)
+ollama pull qwen3:4b-instruct-2507-q4_K_M          # on-device call summaries (fast, JSON-reliable)
 ollama pull nomic-embed-text    # on-device embeddings for search
 ```
 
@@ -99,7 +99,7 @@ shows live status (green = ready).
 | Vector | embeddings-as-BLOB + in-Swift brute-force cosine (graduates to sqlite-vec at scale) |
 | Retrieval | FTS5 ⊕ vector ⊕ **Reciprocal Rank Fusion**, selectivity-routed hard filters, strict citations |
 | Embeddings | `nomic-embed-text` via Ollama (local) |
-| Summaries | `qwen2.5:3b` via Ollama (local); `claude`/`codex` CLI for premium regenerate |
+| Summaries | `qwen3:4b-instruct-2507-q4_K_M` via Ollama (local); `claude`/`codex` CLI for premium regenerate |
 | Transcription | WhisperKit (ASR) + FluidAudio (diarization), on-device |
 | Generation | `claude` / `codex` CLI subscriptions — env-scrubbed, tool-stripped, injection-inert |
 | Distribution | Developer-ID sign + notarize + Sparkle, **direct-download** (not the App Store) |

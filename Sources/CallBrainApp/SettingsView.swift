@@ -43,8 +43,8 @@ struct SettingsView: View {
     // Local-only mode (Task 9.4) — nothing leaves this Mac.
     @AppStorage(AppEnvironment.localOnlyKey) private var localOnly = false
     // Local summary model (F13: was consumed for live + post-call summaries but had NO UI — the user was
-    // permanently locked to the hardcoded qwen2.5:3b even if they'd only pulled a bigger model).
-    @AppStorage("callbrain.localSummaryModel") private var localSummaryModel = "qwen2.5:3b"
+    // permanently locked to the hardcoded default even if they'd only pulled a bigger model).
+    @AppStorage("callbrain.localSummaryModel") private var localSummaryModel = "qwen3:4b-instruct-2507-q4_K_M"
     // Personal profile (Task 1.4) — catered answers + plain-language jargon glossing.
     @State private var profileRole = ""
     @State private var profileCompany = ""
@@ -415,9 +415,8 @@ struct SettingsView: View {
             }
             Section("Local engine") {
                 Picker("Summary model", selection: $localSummaryModel) {
-                    Text("qwen2.5:3b — fastest, least memory").tag("qwen2.5:3b")
-                    Text("qwen2.5:7b — sharper, more memory").tag("qwen2.5:7b")
-                    Text("qwen2.5:14b — best, most memory").tag("qwen2.5:14b")
+                    Text("qwen3 4B-Instruct — best, recommended (2.5 GB)").tag("qwen3:4b-instruct-2507-q4_K_M")
+                    Text("qwen3 30B-A3B — max quality (large, ~18 GB)").tag("qwen3:30b-a3b-instruct-2507-q4_K_M")
                 }
                 Text("The on-device model that writes your local call summaries (live and post-call). Bigger "
                      + "reads better but is slower and uses more memory — and it must be installed first "

@@ -33,7 +33,7 @@ final class SystemStatus {
         snap = Snapshot(claudeOK: c, codexOK: x, ollamaOK: models != nil, models: models ?? [], loaded: true)
     }
 
-    /// True if an Ollama model matching `prefix` (e.g. "qwen2.5:3b", "nomic-embed-text") is installed.
+    /// True if an Ollama model matching `prefix` (e.g. "qwen3:4b-instruct-2507-q4_K_M", "nomic-embed-text") is installed.
     func hasModel(_ prefix: String) -> Bool {
         snap.models.contains { $0 == prefix || $0.hasPrefix(prefix) || $0.hasPrefix(prefix + ":") }
     }

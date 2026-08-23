@@ -1169,12 +1169,13 @@ final class AppEnvironment {
         }
     }
 
-    /// The routine local model. Qwen2.5-3B via Ollama — ~3× faster + 4-8× cooler than 14B (so a background
-    /// summary never spins the fans), while still the most JSON-reliable model in its class (research
-    /// 2026-06-30). The heavyweight 14B / premium quality is the explicit "Regenerate with AI" (cloud Opus)
-    /// pass only — never automatic. Configurable in Settings.
+    /// The routine local model. qwen3:4b-instruct-2507-q4_K_M via Ollama — Qwen2.5-7B-class quality at ~2.5GB,
+    /// non-thinking instruct (clean JSON, low first-token latency) yet still fast + cool enough that a
+    /// background summary never spins the fans (upgraded from qwen2.5:3b 2026-08-22 — Qwen3-4B ≈ Qwen2.5-7B).
+    /// The premium quality tier is the explicit "Regenerate with AI" (cloud Opus) pass only — never
+    /// automatic. Configurable in Settings (qwen3:30b-a3b-instruct-2507 is the max-quality large alternative).
     var localSummaryModel: String {
-        UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:3b"
+        UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen3:4b-instruct-2507-q4_K_M"
     }
 
     /// Generate the Summary-tab content for a call.
