@@ -156,6 +156,46 @@ public enum NativeMessagingInstaller {
         }
     }
 
+    // MARK: - Native-paired marker (pairing hardening)
+
+    /// The 0600 marker `cbpairhost` writes AFTER it has successfully handed the token to the pinned
+    /// extension over Chrome's UNSPOOFABLE Native Messaging channel. Its presence proves NM works for this
+    /// user, so the app can stop auto-arming the locally-spoofable `/pair` HTTP window entirely.
+    public static func nativePairedMarkerURL(applicationSupport: URL) -> URL {
+        applicationSupport
+            .appendingPathComponent("CallBrain", isDirectory: true)
+            .appendingPathComponent("native-paired", isDirectory: false)
+    }
+
+    /// Record that a Native-Messaging pair succeeded: write the 0600 marker in the 0700 CallBrain dir. Best
+    /// effort — a marker we fail to write simply means the app keeps offering the (short, origin-pinned)
+    /// auto-pair window next launch, which is safe. Called by `cbpairhost` only after it served the token,
+    /// so it can only be written when NM actually works. Returns the marker URL when it was written.
+    @discardableResult
+    public static func markNativePaired(applicationSupport: URL, fileManager: FileManager = .default) -> URL? {
+        let dir = applicationSupport.appendingPathComponent("CallBrain", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+        } catch { /* dir may already exist; fall through and try to write */ }
+        let file = nativePairedMarkerURL(applicationSupport: applicationSupport)
+        // Content is a stamp for debuggability only; the FILE'S EXISTENCE is the signal.
+        let body = Data(ISO8601DateFormatter().string(from: Date()).utf8)
+        do {
+            try body.write(to: file, options: [.atomic])
+            try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            return file
+        } catch {
+            return nil
+        }
+    }
+
+    /// Whether the Native-Messaging pair has ever succeeded (the marker exists). When true, the app must
+    /// NOT auto-arm the `/pair` window — NM re-hands the token on demand, so `/pair` is pure attack surface.
+    public static func hasNativePaired(applicationSupport: URL, fileManager: FileManager = .default) -> Bool {
+        fileManager.fileExists(atPath: nativePairedMarkerURL(applicationSupport: applicationSupport).path)
+    }
+
     /// Read the bridge file — used by the `cbpairhost` binary. Returns nil when Recap isn't running
     /// / hasn't paired (no file yet), or the file is unreadable/corrupt.
     public static func readBridge(applicationSupport: URL, fileManager: FileManager = .default) -> PairBridgePayload? {

@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import CallBrainAppCore
 
 /// T2 remediation — the recording lease + atomic harvest that keep a live recording's captions safe from
@@ -82,5 +83,68 @@ struct MeetSessionLeaseTests {
         s.beginRecording()
         s.append(speaker: "A", text: "short call")
         #expect(!s.endRecording().truncated)
+    }
+
+    // ── T4: bind captions to one meeting tab ──
+
+    @Test("second-tab captions are dropped while bound to owner tab A")
+    func testSecondTabDroppedWhileBound() {
+        let s = MeetSession()
+        s.beginRecording(ownerTab: 1)              // extension named tab 1 up front
+        s.append(speaker: "Alex", text: "owner tab line", tab: 1)   // kept
+        s.append(speaker: "Intruder", text: "other tab line", tab: 2)   // different tab → dropped
+        #expect(s.transcript() == "Alex: owner tab line")
+        let harvest = s.endRecording()
+        #expect(harvest.turns.map(\.speaker) == ["Alex"])
+    }
+
+    @Test("app-initiated recording binds captions to the first writer's tab")
+    func testAppInitiatedBindsFirstWriter() {
+        let s = MeetSession()
+        s.beginRecording()                          // ownerTab nil → bind first-writer-wins
+        s.append(speaker: "Maya", text: "first writer", tab: 7)    // binds tab 7
+        s.append(speaker: "Other", text: "from tab nine", tab: 9)  // different tab → dropped
+        s.append(speaker: "Maya", text: "still tab seven", tab: 7) // same bound tab → kept
+        #expect(s.transcript() == "Maya: first writer\nMaya: still tab seven")
+    }
+
+    @Test("legacy nil-tab captions are always accepted (back-compat)")
+    func testLegacyNilTabAlwaysAccepted() {
+        // Even bound to a specific owner tab, a caption with NO tab id (legacy extension) is kept.
+        let s = MeetSession()
+        s.beginRecording(ownerTab: 1)
+        s.append(speaker: "Alex", text: "tab one", tab: 1)
+        s.append(speaker: "Legacy", text: "no tab id")   // tab nil → accepted despite the binding
+        #expect(s.transcript() == "Alex: tab one\nLegacy: no tab id")
+
+        // And an entirely tab-less recording (legacy extension end-to-end) accepts every caption.
+        let s2 = MeetSession()
+        s2.beginRecording()
+        s2.append(speaker: "A", text: "one")
+        s2.append(speaker: "B", text: "two")
+        #expect(s2.transcript() == "A: one\nB: two")
+    }
+
+    @Test("a dropped foreign-tab caption leaves the freshness clock untouched")
+    func testDroppedForeignTabDoesNotRefreshFreshness() {
+        let s = MeetSession()
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        s.beginRecording(ownerTab: 1)
+        s.append(speaker: "Alex", text: "owner", tab: 1, at: t0)
+        // A later foreign-tab caption is dropped and must NOT move the freshness clock forward.
+        s.append(speaker: "Intruder", text: "other", tab: 2, at: t0.addingTimeInterval(30))
+        #expect(s.secondsSinceLastTurn(now: t0.addingTimeInterval(30)) == 30)   // measured from t0, not t0+30
+    }
+
+    @Test("the tab binding does not leak into the next recording")
+    func testBindingResetsPerRecording() {
+        let s = MeetSession()
+        s.beginRecording(ownerTab: 1)
+        s.append(speaker: "Alex", text: "call one", tab: 1)
+        _ = s.endRecording()
+        // A brand-new app-initiated recording must accept a DIFFERENT tab as its first writer.
+        s.beginRecording()
+        s.append(speaker: "Maya", text: "call two", tab: 2)
+        #expect(s.transcript() == "Maya: call two")
     }
 }

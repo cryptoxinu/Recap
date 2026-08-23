@@ -38,6 +38,10 @@ struct CBPairHost {
             return
         }
         respond(stdout, PairHostResponse.ok(token: bridge.token, port: bridge.port))
+        // The token was just handed to the pinned extension over Chrome's UNSPOOFABLE Native Messaging
+        // channel — record that NM works so the app stops auto-arming the locally-spoofable `/pair` window
+        // on every activate. Best-effort; a write failure only leaves the (short, origin-pinned) window on.
+        NativeMessagingInstaller.markNativePaired(applicationSupport: appSupport)
     }
 
     private static func respond(_ out: FileHandle, _ body: Data) {

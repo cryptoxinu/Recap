@@ -23,7 +23,7 @@ final class LocalServer: @unchecked Sendable {
     private let session: MeetSession
     private let onImport: @Sendable (String) async -> Bool
     private let onMeetMuted: @Sendable (Bool) async -> Void
-    private let onRecordStart: @Sendable () async -> Bool
+    private let onRecordStart: @Sendable (Int?) async -> Bool
     private let onRecordStop: @Sendable () async -> Void
     private let recordStatus: @Sendable () async -> RecordStatusSnapshot
     private let onPaired: @Sendable () async -> Void
@@ -53,7 +53,7 @@ final class LocalServer: @unchecked Sendable {
     init(token: String, ask: any LiveAsk, session: MeetSession,
          onImport: @escaping @Sendable (String) async -> Bool,
          onMeetMuted: @escaping @Sendable (Bool) async -> Void,
-         onRecordStart: @escaping @Sendable () async -> Bool = { false },
+         onRecordStart: @escaping @Sendable (Int?) async -> Bool = { _ in false },
          onRecordStop: @escaping @Sendable () async -> Void = {},
          recordStatus: @escaping @Sendable () async -> RecordStatusSnapshot
             = { RecordStatusSnapshot(recording: false, processing: false, elapsed: "0:00") },
@@ -311,7 +311,10 @@ final class LocalServer: @unchecked Sendable {
             await handleMicState(request, on: connection)
 
         case .recordStart:
-            let started = await onRecordStart()
+            // Optional {tab} body (T4). A legacy extension sends no/empty body → decode fails → nil tab →
+            // app-initiated (first-writer) binding, unchanged behavior.
+            let ownerTab = decode(RecordStartPayload.self, from: request)?.tab
+            let started = await onRecordStart(ownerTab)
             sendAndClose(.json(status: 200, reason: "OK", object: ["ok": started, "recording": started]), on: connection)
 
         case .recordStop:
@@ -359,7 +362,9 @@ final class LocalServer: @unchecked Sendable {
             sendAndClose(.badRequest(), on: connection)
             return
         }
-        session.append(speaker: payload.speaker, text: payload.text, final: payload.final ?? true)
+        // T4 — pass the caption's originating tab so MeetSession can bind captions to one meeting tab. A
+        // legacy payload omits `tab` → nil → always accepted (back-compat).
+        session.append(speaker: payload.speaker, text: payload.text, final: payload.final ?? true, tab: payload.tab)
         sendAndClose(.json(status: 200, reason: "OK", object: ["ok": true]), on: connection)
     }
 
@@ -523,6 +528,11 @@ private struct LivePayload: Decodable {
     let speaker: String
     let text: String
     let final: Bool?
+    // T4 (all optional → a legacy extension that doesn't send them still decodes): which browser tab /
+    // meeting this caption came from, so MeetSession can bind captions to one tab.
+    let source: String?
+    let tab: Int?
+    let meetingId: String?
 }
 
 private struct AskPayload: Decodable {
@@ -535,6 +545,16 @@ private struct ImportPayload: Decodable {
 
 private struct MicStatePayload: Decodable {
     let muted: Bool
+    // T4 — same optional tab/meeting context as LivePayload (Decodable-compatible with legacy payloads).
+    let source: String?
+    let tab: Int?
+    let meetingId: String?
+}
+
+/// Optional body for `/record/start`: the extension may name the meeting tab it wants recorded so
+/// captions bind to it (T4). Absent/empty body (legacy extension) → `tab == nil`, app-initiated binding.
+private struct RecordStartPayload: Decodable {
+    let tab: Int?
 }
 
 private struct HTTPResponse {
