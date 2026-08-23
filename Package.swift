@@ -59,7 +59,11 @@ let package = Package(
             name: "CallBrainApp",
             dependencies: ["CallBrainCore", "CallBrainAppCore", "CallBrainTranscribe",
                            .product(name: "MarkdownUI", package: "swift-markdown-ui")],
-            resources: [.copy("Resources/AppIcon.png")],
+            // AppIcon.png is NOT an SPM resource: the generated Bundle.module accessor resolves to
+            // Bundle.main.bundleURL (the .app root, which cannot be code-signed) and traps at launch
+            // once the build-dir fallback is gone. install-local.sh / package.sh copy AppIcon.png
+            // straight into Contents/Resources, and the app loads it via Bundle.main (see CallBrainApp.swift).
+            exclude: ["Resources/AppIcon.png"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(

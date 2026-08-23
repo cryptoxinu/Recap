@@ -43,8 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         MainThreadWatchdog.shared.startIfEnabled()   // CALLBRAIN_WATCHDOG=1 → logs any main-thread stall
-        // Brand the Dock/⌘-Tab icon (works for the dev run too, which has no .icns bundle).
-        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+        // Brand the Dock/⌘-Tab icon from the bundled PNG when present. Uses Bundle.main (the installed
+        // app ships AppIcon.png in Contents/Resources); Bundle.main.url returns nil harmlessly if it is
+        // absent (e.g. a `swift run` dev launch), so this never traps. NOTE: do NOT use Bundle.module
+        // here — the SwiftPM resource-bundle accessor resolves to Bundle.main.bundleURL (the .app root,
+        // which is unsignable) and fatal-errors at launch once the build-dir fallback is gone.
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
            let icon = NSImage(contentsOf: url) {
             NSApp.applicationIconImage = icon
         }

@@ -31,6 +31,10 @@ STAMP="$(date +%Y.%m.%d)-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || 
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $STAMP" "$APP/Contents/Info.plist" || true
 echo "  build stamp: $STAMP"
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+# AppIcon.png ships in Contents/Resources so the app can load it via Bundle.main (Dock/⌘-Tab branding).
+# It is deliberately NOT an SPM resource: the generated Bundle.module accessor resolves to the .app
+# root (unsignable) and traps at launch once the build-dir fallback is gone. See Package.swift.
+cp "$ROOT/Sources/CallBrainApp/Resources/AppIcon.png" "$APP/Contents/Resources/AppIcon.png"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
 # SPM resource bundles (e.g. the app-icon PNG) must travel inside the .app to be self-contained.
 # NOTE: .build/release is a SYMLINK to .build/<arch>/release, and `find` does not descend into a

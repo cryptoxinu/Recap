@@ -30,6 +30,9 @@ cp "$ROOT/.build/release/cbtranscribe" "$APP/Contents/MacOS/cbtranscribe"
 cp "$ROOT/.build/release/cbpairhost" "$APP/Contents/MacOS/cbpairhost"   # Chrome native-messaging pairing host
 cp "$ROOT/tools/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/tools/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+# AppIcon.png in Contents/Resources → loaded via Bundle.main (NOT an SPM resource; the Bundle.module
+# accessor resolves to the unsignable .app root and traps at launch). See Package.swift / install-local.sh.
+cp "$ROOT/Sources/CallBrainApp/Resources/AppIcon.png" "$APP/Contents/Resources/AppIcon.png"
 cp "$ROOT/Sources/CallBrainApp/PrivacyInfo.xcprivacy" "$APP/Contents/Resources/" 2>/dev/null || true
 # SPM resource bundles (e.g. the app icon PNG) must travel inside the .app to be self-contained.
 # NOTE: .build/release is a SYMLINK to .build/<arch>/release, and `find` does not descend into a
