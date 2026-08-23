@@ -1144,6 +1144,10 @@ final class AppEnvironment {
         guard let r = await TitleIntelligence(llm: router).generate(from: text, fallbackTitle: m.title) else { return false }
         await Self.loggedWrite("setMeetingIntelligence") { try store.setMeetingIntelligence(id: meetingID, aiTitle: r.title, aiSummary: r.summary) }
         titlesRevision &+= 1
+        // The cleaned AI title bumped the meeting's updated_at → re-export the corpus so Hermes gets the
+        // polished title promptly, instead of waiting for an unrelated export (summary finalize / delete)
+        // to trigger a sync. Mirrors generateCallSummary + delete. Skipped in local-only mode (no egress).
+        if !isLocalOnly { corpus.scheduleSync() }
         return true
     }
 
