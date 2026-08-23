@@ -188,6 +188,11 @@ struct MeetingDetailView: View {
                     Button { copyRecap() } label: { Label("Copy Recap", systemImage: "doc.on.doc") }
                     Button { exportMarkdown() } label: { Label("Export Markdown…", systemImage: "square.and.arrow.down") }
                     Button { exportPDF() } label: { Label("Export PDF…", systemImage: "doc.richtext") }
+                    if hasTranscript {   // W5 — subtitles only make sense for a speaker-attributed transcript
+                        Divider()
+                        Button { exportSubtitles(.srt) } label: { Label("Export Subtitles (.srt)…", systemImage: "captions.bubble") }
+                        Button { exportSubtitles(.vtt) } label: { Label("Export Subtitles (.vtt)…", systemImage: "captions.bubble") }
+                    }
                 } label: { Image(systemName: "square.and.arrow.up") }
                 .help("Share this call")
             }
@@ -307,6 +312,57 @@ struct MeetingDetailView: View {
         let op = NSPrintOperation(view: tv, printInfo: info)
         op.showsPrintPanel = false; op.showsProgressPanel = false
         if !op.run() { exportError = "The PDF couldn't be written. Try again." }   // r2 MED
+    }
+
+    // MARK: - subtitle export (W5)
+
+    /// Export this call's turn-level transcript as `.srt`/`.vtt` captions. Utterances are read AND
+    /// rendered off-main (the exporter is pure), then a save panel is presented on the main actor. A turn
+    /// with no start time carries the previous turn's start forward so every cue lands on the timeline.
+    private func exportSubtitles(_ format: SubtitleExport.SubtitleFormat) {
+        let store = env.store, id = meetingID
+        let title = meeting?.displayTitle ?? "call"
+        let ext = format == .srt ? "srt" : "vtt"
+        Task {
+            let content = await Task.detached { () -> String? in
+                // Exclude Gemini-notes pseudo-turns (speaker == "Gemini Notes"): on a MERGED
+                // recording+notes call store.utterances returns BOTH the timed dialogue AND the notes
+                // rows (tStart == 0), which would export as bogus 00:00 cues interleaved with the real
+                // dialogue. Mirror the Transcript-tab filter (buildSnapshot) so subtitles == what's shown.
+                let rows = ((try? store.utterances(meetingID: id)) ?? [])
+                    .filter { $0.speaker != GeminiNotesParser.pseudoSpeaker }
+                guard !rows.isEmpty else { return nil }
+                var carried = 0.0
+                let utterances = rows.map { row -> SubtitleExport.SubtitleUtterance in
+                    let start = row.tStart ?? carried
+                    carried = start
+                    return SubtitleExport.SubtitleUtterance(start: start, speaker: row.speaker, text: row.text)
+                }
+                return SubtitleExport.subtitles(from: utterances, format: format)
+            }.value
+            guard let content, !content.isEmpty else {
+                exportError = "This call has no transcript to export as subtitles yet."
+                return
+            }
+            saveSubtitles(content, name: subtitleFilename(title, ext: ext))
+        }
+    }
+
+    private func saveSubtitles(_ content: String, name: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = name
+        panel.allowedContentTypes = [.init(filenameExtension: (name as NSString).pathExtension) ?? .plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try content.data(using: .utf8)?.write(to: url) }
+        catch { exportError = error.localizedDescription }   // never swallow a failed save
+    }
+
+    /// A save-panel-safe default filename from the call title (path separators/colons → `-`).
+    private func subtitleFilename(_ title: String, ext: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? "call" : trimmed
+        let safe = base.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
+        return "\(safe).\(ext)"
     }
 
     private var renameSheet: some View {
