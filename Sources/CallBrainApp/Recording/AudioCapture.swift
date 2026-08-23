@@ -61,7 +61,11 @@ final class AudioCapture {
     /// The checkpoint directory name (== mix stem uuid) of the RUNNING recording, so launch recovery
     /// can exclude a live recording's own dir. nil whenever not recording.
     private(set) var activeCheckpointID: String?
-    private var systemAudio: SystemAudioCapture?
+    /// The active system-audio backend (protocol type so it can be either the ScreenCaptureKit path or
+    /// the Core Audio process tap). Built via `SystemAudioBackendFactory` — in Phase B the effective
+    /// default is `.screenCapture`, so this is a `SystemAudioCapture` unless the founder opted into the
+    /// tap in Settings. The `onSamples`/`onState` wiring below is identical for both backends.
+    private var systemAudio: SystemAudioBackend?
     private var systemAudioReceivedSamples = false
     private var systemAudioWatchdog: Task<Void, Never>?
     private var meetMuted = false
@@ -171,7 +175,10 @@ final class AudioCapture {
 
         isRecording = true; startedAt = Date()
         if includeSystemAudio {
-            let sys = SystemAudioCapture(
+            // Pick the backend from the persisted preference (Phase B default resolves to SCKit, so
+            // this is byte-for-byte today's behavior unless the founder opted into the tap in Settings).
+            // The sink is identical for either backend — the SAME `w.ingestSystem` mix path.
+            let sys = SystemAudioBackendFactory.make(
                 target: targetFormat,
                 onState: { [weak self] state in
                     Task { @MainActor in self?.updateSystemAudioState(state) }

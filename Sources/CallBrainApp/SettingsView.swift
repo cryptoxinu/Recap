@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import CallBrainCore
+import CallBrainAppCore
 
 struct SettingsView: View {
     @Environment(AppEnvironment.self) private var env
@@ -31,6 +32,9 @@ struct SettingsView: View {
     @State private var recordingsSummary = "…"
     @State private var recordingsEmpty = true
     @State private var showWipeRecordings = false
+    // System-audio capture backend (W1a). Default `.auto` — in Phase B that resolves to
+    // ScreenCaptureKit (the proven path); the Core Audio tap is opt-in here for founder dogfooding.
+    @AppStorage(SystemAudioBackendKind.defaultsKey) private var systemAudioBackend: SystemAudioBackendKind = .auto
     // Who "you" are — so the AI can tell which tasks are yours.
     @AppStorage(FounderIdentity.defaultsKey) private var founderNames = ""
     @AppStorage(TeamDomains.overrideKey) private var teamDomains = ""
@@ -287,6 +291,16 @@ struct SettingsView: View {
                 Text("When on, Recap starts recording automatically as a calendar meeting that "
                      + "has a Zoom / Google Meet / Teams link begins, and links the recording to that "
                      + "call. Off by default — audio is transcribed on-device and never leaves your Mac.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("System audio capture", selection: $systemAudioBackend) {
+                    Text("Automatic (recommended)").tag(SystemAudioBackendKind.auto)
+                    Text("Core Audio tap — lighter permission").tag(SystemAudioBackendKind.coreAudioTap)
+                    Text("Screen Recording (most compatible)").tag(SystemAudioBackendKind.screenCapture)
+                }
+                Text("How Recap captures the other participants. Automatic uses the most compatible path "
+                     + "(Screen Recording). The Core Audio tap needs only the lighter Audio Recording "
+                     + "permission — no Screen Recording prompt — but can miss remote audio on Bluetooth "
+                     + "speakers/headsets, where Recap falls back to Screen Recording automatically.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("More accurate live transcription", isOn: Binding(
                     get: { env.liveTranscriptionAccurate },

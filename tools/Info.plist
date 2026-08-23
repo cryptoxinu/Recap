@@ -17,6 +17,11 @@
   <string>Recap reads today's meetings to prep you: who you're meeting and what was said last time. Events never leave your Mac.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Recap records your meetings so it can transcribe and summarize them on-device. Audio never leaves your Mac.</string>
+  <!-- System Audio Recording (kTCCServiceAudioCapture) — used by the Core Audio process-tap backend to
+       capture the other participants. Distinct from the mic grant; if this key is missing the tap
+       returns success but yields SILENCE. Lighter than the Screen Recording grant the SCKit path needs. -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Recap records the other participants on your calls so it can transcribe and summarize the meeting on-device. Audio never leaves your Mac.</string>
   <!-- Deep link so the Chrome extension can launch/focus the app + trigger one-click pairing -->
   <key>CFBundleURLTypes</key>
   <array>

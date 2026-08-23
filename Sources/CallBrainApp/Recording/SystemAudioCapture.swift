@@ -8,7 +8,7 @@ private final class ConvertOnceSys: @unchecked Sendable { var fed = false }
 /// Captures the Mac's SYSTEM audio (what you hear — the other participants on a headset call)
 /// via ScreenCaptureKit and delivers it converted to the recorder's target format. Best-effort,
 /// but not silent: setup failures and no-sample sessions are surfaced to the recorder UI.
-final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, SystemAudioBackend, @unchecked Sendable {
 
     private let target: AVAudioFormat
     /// Delivers resampled system audio (Int16 16k mono, Sendable) + a monotonic capture timestamp

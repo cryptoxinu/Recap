@@ -125,7 +125,13 @@ final class RecordingModel {
             // keep recording your mic but surface a ONE-TAP fix — the on-device live transcript still works for
             // what your mic hears, and enabling Screen Recording captures the whole call next time. (The native
             // "Allow" dialog is popped from SystemAudioCapture; this drives the in-window banner + Settings jump.)
-            if !PrivacySettings.screenRecordingAuthorized() {
+            // Only the ScreenCaptureKit backend needs the Screen Recording grant. When the founder has
+            // opted into the Core Audio tap (Phase B dogfooding), skip this banner — the tap uses the
+            // lighter Audio Recording permission, and a silent denial there is caught by the existing
+            // SystemAudioHealth watchdog (→ .noSamples → the mic-only warning on stop) instead. The
+            // default resolves to `.screenCapture`, so this is unchanged for everyone else.
+            if SystemAudioBackendFactory.resolve(SystemAudioBackendKind.current()) == .screenCapture,
+               !PrivacySettings.screenRecordingAuthorized() {
                 permissionIssue = .screenRecording
                 errorText = "Recap can hear you, but not the other participants yet. Turn on Screen Recording for Recap (button below), then start the recording again to capture the whole call."
             }
