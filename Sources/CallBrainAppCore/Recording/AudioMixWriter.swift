@@ -66,16 +66,21 @@ public final class AudioMixWriter: @unchecked Sendable {
     private var lastMicState: MicState?
     private let forceMuteLock = NSLock()
     private var forceMutedStorage = false
-    // Lower than WhisperKit's default 0.02 so QUIET speech isn't dropped — founder had to talk loudly and
-    // the gate still cut words. Err toward capturing; true silence is still well below this.
-    private let vad: EnergyVADGate
+    // Primary speech detector (default `SpectralVADGate`): a low-latency energy+spectral gate that
+    // keeps the founder's QUIET speech the old crude 0.008 RMS gate dropped, while still gating true
+    // silence / low hum. Injected via the init so tests can swap it; the field is the protocol type.
+    private let vad: any VoiceActivityDetector
+    // Guaranteed FALLBACK: the shipped 0.008 energy gate. `containsSpeech` OR-s it in so the recorder
+    // is NEVER less permissive than what shipped — a real onset is never dropped (record-when-unsure),
+    // even if the primary detector ever regressed below the energy floor.
+    private let energyFallback = EnergyVADGate()
 
     public init?(mixURL: URL,
                  systemSidecarURL: URL?,
                  target: AVAudioFormat,
                  micSourceRate: Double,
                  gateEnabled: Bool = true,
-                 vad: EnergyVADGate = EnergyVADGate(),
+                 vad: any VoiceActivityDetector = SpectralVADGate(),
                  onMicSamples: (@Sendable ([Int16], UInt64) -> Void)? = nil,
                  onSystemSamples: (@Sendable ([Int16], UInt64) -> Void)? = nil,
                  onMicState: (@Sendable (MicState) -> Void)? = nil,
@@ -353,6 +358,10 @@ public final class AudioMixWriter: @unchecked Sendable {
 
     private func containsSpeech(in samples: [Int16]) -> Bool {
         let waveform = samples.map { Float($0) / 32_768 }
-        return vad.voiceActivity(in: waveform).contains(true)
+        // Primary detector first (catches quiet voiced speech the energy floor misses). If it reads
+        // no-speech, fall back to the shipped 0.008 energy gate so we never drop what it would have
+        // kept — bias to record-when-unsure. The fallback runs only on primary-negative buffers.
+        if vad.voiceActivity(in: waveform).contains(true) { return true }
+        return energyFallback.voiceActivity(in: waveform).contains(true)
     }
 }
