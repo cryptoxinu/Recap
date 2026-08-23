@@ -58,6 +58,17 @@ struct RecordView: View {
         }
     }
 
+    /// The system-audio clause of the first-run permission hint, matching the backend that will
+    /// actually run: the Core Audio tap asks for "system-audio recording" (lighter), while
+    /// ScreenCaptureKit asks for "screen-recording". Empty when the founder isn't capturing the
+    /// other participants. In Phase B the resolved backend is `.screenCapture` by default.
+    private func systemAudioPermissionHint(_ rec: RecordingModel) -> String {
+        guard rec.includeSystemAudio else { return "" }
+        return SystemAudioBackendFactory.resolve(SystemAudioBackendKind.current()) == .coreAudioTap
+            ? " and system-audio recording"
+            : " and screen-recording"
+    }
+
     @ViewBuilder private func idleControls(_ rec: RecordingModel) -> some View {
         @Bindable var rec = rec
         // The start form stays a comfortable width even in a wide resized window.
@@ -81,7 +92,7 @@ struct RecordView: View {
             .toggleStyle(.checkbox)
             templatePicker(rec)
             Text("First time, macOS will ask for microphone" +
-                 (rec.includeSystemAudio ? " and screen-recording" : "") +
+                 systemAudioPermissionHint(rec) +
                  " access — audio is transcribed on-device and never leaves your Mac.")
                 .font(.system(size: 11)).foregroundStyle(.tertiary)
             Button {
