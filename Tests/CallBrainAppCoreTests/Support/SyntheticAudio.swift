@@ -47,6 +47,23 @@ func floatSine(freq: Double, rms: Double, sampleRate: Double, count: Int) -> [Fl
     }
 }
 
+/// A "voiced-like" burst: a sum of in-band formant tones (default F1/F2/F3 ≈ 600/1500/2500 Hz, all
+/// inside the ~250–3800 Hz human-voice band), NORMALIZED to an exact target RMS. Used for the W1c
+/// acceptance fixture — a QUIET voiced burst (RMS 0.004–0.007, i.e. below the old 0.008 energy floor)
+/// the crude `EnergyVADGate` drops but the spectral gate keeps.
+func floatVoicedBurst(rms targetRMS: Double, sampleRate: Double, count: Int,
+                      formants: [Double] = [600, 1500, 2500]) -> [Float] {
+    guard count > 0 else { return [] }
+    let raw = (0..<count).map { i -> Double in
+        let t = Double(i) / sampleRate
+        return formants.reduce(0.0) { $0 + sin(2.0 * Double.pi * $1 * t) }
+    }
+    let meanSquare = raw.reduce(0.0) { $0 + $1 * $1 } / Double(count)
+    let currentRMS = meanSquare.squareRoot()
+    let scale = currentRMS > 0 ? targetRMS / currentRMS : 0
+    return raw.map { Float($0 * scale) }
+}
+
 /// Pull-driven tone source over the fixed timeline. `next()` walks a pre-computed frame list; the
 /// cursor is the only mutable state and `drive(_:into:)` pulls it on a single thread, so
 /// `@unchecked Sendable` is safe here (test-only, no cross-thread sharing).
