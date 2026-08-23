@@ -120,6 +120,13 @@ final class AppEnvironment {
             guard let self else { return }
             await self.corpus.reconcileOnLaunch()   // (re)install the sync agent if enabled, then catch-up export
         }
+        // Crash-recovery catch-up (W1b): reconstruct + import any recording whose checkpoint segments
+        // were orphaned by a mid-call kill. Idempotent + guarded against a live recording; no-ops when
+        // there are no orphaned checkpoints (the common case).
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.recoverCrashedRecordings()
+        }
         startLocalServer()
         AppEnvironment.current = self   // let the URL handler reach the live env for one-click pairing
         refreshReminders()   // seed the cached menu-bar counts off-main (never blocks launch)
@@ -141,6 +148,10 @@ final class AppEnvironment {
         if let r = _recording { return r }
         let r = RecordingModel(); _recording = r; return r
     }
+    /// The checkpoint id of a currently-running recording, if any — read WITHOUT force-creating the
+    /// lazy recording model (launch must not touch AVAudioEngine). Launch crash-recovery excludes this
+    /// dir so a live recording is never "recovered" out from under itself (W1b guard).
+    var activeCheckpointRecordingID: String? { _recording?.capture.activeCheckpointID }
     /// Drives the Record panel sheet — any surface (sidebar, menu bar, ⌘R) flips this.
     var recordSheetShown = false
 
