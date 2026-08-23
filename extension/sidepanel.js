@@ -397,16 +397,38 @@ async function pollRecordStatus() {
   }
 }
 
+// T4: the id of the active meeting tab, so an extension-initiated recording binds the owner tab (a
+// caption from any OTHER tab is then dropped by the app, preventing multi-meeting contamination).
+async function activeMeetingTabId() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const id = tabs && tabs[0] ? tabs[0].id : null;
+    return Number.isInteger(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 async function toggleRecord() {
   if (!cfg.token) { await loadConfig(); return; }
   const btn = el("recordBtn");
   btn.disabled = true;
   const starting = !recording;
   try {
-    const r = await fetch(`${base()}${starting ? "/record/start" : "/record/stop"}`, {
-      method: "POST",
-      headers: authHeaders(),
-    });
+    // On start, bind the recording to the active meeting tab via { tab } (the Swift side accepts it as
+    // optional — a legacy nil tab is still fine). Stop needs no body.
+    let opts;
+    if (starting) {
+      const tab = await activeMeetingTabId();
+      opts = {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ tab }),
+      };
+    } else {
+      opts = { method: "POST", headers: authHeaders() };
+    }
+    const r = await fetch(`${base()}${starting ? "/record/start" : "/record/stop"}`, opts);
     const j = await r.json().catch(() => ({}));
     if (starting && r.ok && j.ok === false) {
       el("recordState").textContent = "Couldn't start — allow Microphone + Screen Recording for Recap.";
