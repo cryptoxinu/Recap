@@ -143,7 +143,7 @@ public struct OllamaSummarizer: Summarizer {
     /// Who the summary is FOR (jargon glossing etc.) — fenced data, defaulted at the app edge.
     public var profile: PersonalProfile? = nil
 
-    public init(model: String = "qwen2.5:3b", baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
+    public init(model: String = "qwen3:4b-instruct-2507-q4_K_M", baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
                 numCtx: Int = 16384, keepAlive: String = "60s", profile: PersonalProfile? = nil) {
         self.model = model; self.baseURL = baseURL; self.numCtx = numCtx; self.keepAlive = keepAlive
         self.profile = profile

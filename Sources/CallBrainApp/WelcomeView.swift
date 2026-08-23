@@ -116,7 +116,7 @@ struct WelcomeView: View {
     private func pullModels() {
         pulling = true
         Task {
-            for model in ["nomic-embed-text", "qwen2.5:3b"] {
+            for model in ["nomic-embed-text", "qwen3:4b-instruct-2507-q4_K_M"] {
                 var req = URLRequest(url: SystemStatus.ollamaBase.appendingPathComponent("api/pull"))
                 req.httpMethod = "POST"
                 req.timeoutInterval = 600

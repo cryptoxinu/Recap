@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Belt-and-suspenders (founder: nothing resident when the app isn't running): if a recording was
         // still active at quit, tell a running Ollama to evict the live model now. No-op if it's down.
-        let model = UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen2.5:3b"
+        let model = UserDefaults.standard.string(forKey: "callbrain.localSummaryModel") ?? "qwen3:4b-instruct-2507-q4_K_M"
         OllamaLiveProvider.unloadSyncBestEffort(model: model)
         // Don't leave the plaintext pairing token on disk once we're quit (SME MED). The bridge is
         // rewritten on the next launch's server bind, so removing it here is safe. A hard `kill` can
