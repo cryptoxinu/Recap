@@ -34,6 +34,15 @@ final class MeetingAutoRecorder {
     /// window rather than missing an already-running call.
     private static let graceMinutes: Double = 5
 
+    /// When to stop suppressing a handled occurrence. Past the event end by the SAME grace window
+    /// `eventHappeningNow` uses, so a call that runs — or resumes after an auto-stop — a few minutes past
+    /// its scheduled end can neither be re-armed by the schedule timer nor re-started by start-on-join.
+    /// (W1d review: the old `event.end` bound left an `end … end+grace` window where a resumed call
+    /// double-started a second recording of the same meeting.)
+    private static func suppressUntil(_ end: Date?, now: Date = Date()) -> Date {
+        max(end ?? now, now).addingTimeInterval(graceMinutes * 60)
+    }
+
     // MARK: - W1d — start-on-join / guarded stop-on-leave (the live "conference active" signal)
 
     /// Polls the conference-active signal + recording state, feeds `decideAutoRecord`, and acts.
@@ -105,7 +114,7 @@ final class MeetingAutoRecorder {
         let now = Date()
         let event = hub.upcoming(limit: 50).first { $0.id == eventID }
         // Suppress this occurrence regardless of outcome (found→its end; gone→a bounded window).
-        handledUntil[eventID] = event?.end ?? now.addingTimeInterval(3600)
+        handledUntil[eventID] = Self.suppressUntil(event?.end, now: now)
 
         let stillValid = event != nil
             && ConferenceLink.detect(in: event!) != nil
@@ -113,6 +122,10 @@ final class MeetingAutoRecorder {
             && env.recording.phase == .idle
         if stillValid, let event {
             await env.recording.startAuto(env: env, title: event.title, eventID: eventID)
+            // A fresh recording begins "not yet seen live" — reset the latch on EVERY auto-start so a
+            // back-to-back recording (A auto-stops, B auto-starts within one poll cycle) can't inherit
+            // A's stale "went-live" state and get wrongly auto-stopped ~20s in. (W1d review, HIGH.)
+            sawConferenceActive = false
         }
         armedEventID = nil
         reschedule(env: env)   // arm the meeting after this one (this occurrence now suppressed)
@@ -181,8 +194,9 @@ final class MeetingAutoRecorder {
             guard rec.phase == .idle, let target else { return }
             await rec.startAuto(env: env, title: target.title, eventID: target.id)
             if rec.phase == .recording {
+                sawConferenceActive = false   // fresh recording begins "not yet seen live" (see fire()).
                 // This occurrence is now handled — the schedule-time timer must not fire it too.
-                handledUntil[target.id] = target.end
+                handledUntil[target.id] = Self.suppressUntil(target.end)
             }
         case .stop:
             guard rec.phase == .recording else { return }
@@ -192,7 +206,7 @@ final class MeetingAutoRecorder {
             // (e.g. a long mid-call silence), don't spawn a second recording of one meeting.
             if let stoppedEventID {
                 let end = env.calendarHub.upcoming(limit: 50).first { $0.id == stoppedEventID }?.end
-                handledUntil[stoppedEventID] = end ?? Date().addingTimeInterval(3600)
+                handledUntil[stoppedEventID] = Self.suppressUntil(end)
             }
             reschedule(env: env)   // arm the meeting after this one
         }
