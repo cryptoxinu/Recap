@@ -79,6 +79,21 @@ struct NativeMessagingTests {
         #expect(NativeMessagingInstaller.readBridge(applicationSupport: tempSupport()) == nil)
     }
 
+    // ── native-paired marker (pairing hardening) ──
+    @Test("markNativePaired → hasNativePaired round-trips; absent marker reads false; file is 0600")
+    func nativePairedMarker() throws {
+        let support = tempSupport()
+        defer { try? FileManager.default.removeItem(at: support) }
+        // Nothing written yet → the app keeps auto-arming the short /pair window.
+        #expect(!NativeMessagingInstaller.hasNativePaired(applicationSupport: support))
+        // cbpairhost writes it after serving the token over Native Messaging.
+        let url = try #require(NativeMessagingInstaller.markNativePaired(applicationSupport: support))
+        #expect(NativeMessagingInstaller.hasNativePaired(applicationSupport: support))
+        let perms = try #require((try FileManager.default
+            .attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.int16Value)
+        #expect(perms == 0o600)   // marker is owner-only, like the bridge
+    }
+
     @Test("removeBridge clears the on-disk token")
     func bridgeRemoval() throws {
         let support = tempSupport()

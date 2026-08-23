@@ -94,7 +94,11 @@ final class RecordingModel {
         title = ""; pendingEventID = nil
     }
 
-    func start(env: AppEnvironment, presetTitle: String? = nil, autoStarted: Bool = false) async {
+    /// `ownerTab` (T4): when an extension-initiated recording names the meeting tab, captions bind to that
+    /// exact tab so a 2nd concurrent captioned call can't contaminate this recording. Nil for app-initiated
+    /// (manual/auto) recordings — MeetSession then binds first-writer-wins.
+    func start(env: AppEnvironment, presetTitle: String? = nil, autoStarted: Bool = false,
+               ownerTab: Int? = nil) async {
         guard phase == .idle, !starting else { return }
         starting = true
         defer { starting = false }
@@ -114,7 +118,7 @@ final class RecordingModel {
         // Claim + clear the Meet-caption buffer BEFORE the awaited capture start (audit HIGH/MED): the
         // lease stops a concurrent extension `/import` from wiping our captions, and taking it before the
         // suspension means captions relayed during capture startup land in THIS recording's window.
-        env.meetSession.beginRecording()
+        env.meetSession.beginRecording(ownerTab: ownerTab)
         // Stamp the real start instant NOW — right before capture begins — not after the model/assistant
         // setup below, so slow warm-up can't push the persisted start time forward and weaken calendar
         // proximity matching (audit LOW). Kept only if capture actually starts.
@@ -228,7 +232,10 @@ final class RecordingModel {
         // audio (system-audio samples really arrived — not merely that the toggle was on, since
         // ScreenCaptureKit can fail/yield nothing). Guards the "mic-only recording while a background Meet
         // tab is captioning" case from stealing an unrelated call's captions (T2 audit MED). Read BEFORE
-        // stop() clears it. A concurrent SECOND live Meet call can still contaminate — real fix is T4.
+        // stop() clears it. T4 now binds captions to a single tab (MeetSession.ownerTab/boundTab), so a
+        // concurrent SECOND captioned call's turns are dropped instead of contaminating this recording —
+        // for extension-initiated recordings the owner tab is bound up front; app-initiated recordings bind
+        // first-writer-wins (a legacy extension that sends no tab id is still accepted, unchanged).
         let capturedCallAudio = capture.didCaptureCallAudio
         guard let raw = await capture.stop() else { phase = .idle; return nil }
         // A mid-recording write failure still yields a (partial) WAV — process it, but tell the

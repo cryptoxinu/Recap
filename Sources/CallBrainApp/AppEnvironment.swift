@@ -611,7 +611,7 @@ final class AppEnvironment {
                                  onMeetMuted: { [weak self] muted in
                                      await MainActor.run { self?.recording.setMeetMuted(muted) }
                                  },
-                                 onRecordStart: { [weak self] in await self?.extensionStartRecording() ?? false },
+                                 onRecordStart: { [weak self] ownerTab in await self?.extensionStartRecording(ownerTab: ownerTab) ?? false },
                                  onRecordStop: { [weak self] in await self?.extensionStopRecording() },
                                  recordStatus: { [weak self] in
                                      await self?.extensionRecordStatus()
@@ -731,20 +731,32 @@ final class AppEnvironment {
     /// Gated on the in-memory session state (not a persistent flag) so a re-loaded extension can always
     /// re-pair on the next launch; the window is origin-pinned to the real extension and grants only the
     /// non-sensitive loopback meeting API (a paired extension never calls `/pair`, so it just expires).
+    ///
+    /// Pairing hardening (W3): once the extension has paired at least once over Chrome's UNSPOOFABLE Native
+    /// Messaging channel (`cbpairhost` wrote the `native-paired` marker), NEVER auto-arm `/pair` again — the
+    /// NM host re-hands the token on demand, so the origin-pinned-but-locally-spoofable `/pair` window is
+    /// pure attack surface with no benefit. Before that first NM pair, keep the auto-arm so a fresh install
+    /// pairs with zero clicks, but shrink the window (300 → 90s) to minimize the residual spoof surface. The
+    /// explicit Settings "Pair extension" gesture (`startExtensionPairing`) still opens a window regardless,
+    /// as a recovery path if the NM host is ever removed.
     func openPairingWindowIfUnpaired() {
         guard pairingState != .paired else { return }
-        localServer?.openPairingWindow(seconds: 300)
+        if NativeMessagingInstaller.hasNativePaired(
+            applicationSupport: NativeMessagingInstaller.defaultApplicationSupport()) { return }
+        localServer?.openPairingWindow(seconds: 90)
     }
 
     /// Start a recording triggered from the extension's record button. Returns whether it's now recording
     /// (already-recording counts as success; a mic/screen-permission failure returns false so the extension
     /// can surface it). Opens the Record panel too so the founder sees the live session in the app.
+    /// `ownerTab` (T4): the meeting tab the extension asked to record, bound so a 2nd captioned tab can't
+    /// contaminate this recording. Nil for older extensions (they don't send a tab) → first-writer binding.
     @discardableResult
-    func extensionStartRecording() async -> Bool {
+    func extensionStartRecording(ownerTab: Int? = nil) async -> Bool {
         if recording.phase == .recording { return true }
         guard recording.phase == .idle else { return false }   // mid-processing a prior stop
         recordSheetShown = true
-        await recording.start(env: self)
+        await recording.start(env: self, ownerTab: ownerTab)
         return recording.phase == .recording
     }
 

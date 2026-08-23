@@ -37,6 +37,14 @@ public final class MeetSession: @unchecked Sendable {
                                        // the live notes+assistant frozen on stale captions (Codex P1).
     private var recordingLeased = false   // a live recording owns this buffer (see beginRecording)
     private var droppedWhileLeased = false // did the cap evict any turn during the current recording lease?
+    // T4 — multi-meeting caption binding. `ownerTab` is the tab an EXTENSION-initiated recording named up
+    // front (passed through /record/start); `boundTab` is the tab this recording's captions belong to.
+    // For an app-initiated recording `ownerTab` is nil and `boundTab` binds first-writer-wins. Once bound,
+    // captions carrying a DIFFERENT tab id are dropped so a 2nd concurrent Meet/Zoom/Teams tab with CC on
+    // can't contaminate the active recording. A `nil` tab (legacy extension that doesn't send tab ids) is
+    // always accepted — we never drop a caption when the client didn't tell us which tab it came from.
+    private var ownerTab: Int?
+    private var boundTab: Int?
 
     public init(maxTurns: Int = 2_000, maxTotalBytes: Int = 512 * 1_024) {
         self.maxTurns = max(1, maxTurns)
@@ -50,7 +58,14 @@ public final class MeetSession: @unchecked Sendable {
     /// (Meet revises the active caption in place — including non-prefix ASR corrections) instead of
     /// appending a duplicate. Once a turn is finalized (`final == true`), the next same-speaker turn is a
     /// new utterance and appends. This fixes the caption duplication/bloat on real calls (audit MED).
-    public func append(speaker: String, text: String, final: Bool = true, at: Date = Date()) {
+    ///
+    /// `tab` (T4) is the browser tab the caption came from. While a recording holds the lease, captions are
+    /// bound to a single tab: the first caption carrying a tab id binds it (unless an extension-initiated
+    /// recording already named the owner tab), and any later caption carrying a DIFFERENT tab id is dropped
+    /// — so a 2nd concurrent captioned call can't leak into this recording. A `nil` tab (legacy extension
+    /// that doesn't send tab ids) is ALWAYS accepted (back-compat — never drop when the client didn't tell
+    /// us the tab).
+    public func append(speaker: String, text: String, final: Bool = true, tab: Int? = nil, at: Date = Date()) {
         let trimmedSpeaker = Self.truncated(
             speaker.trimmingCharacters(in: .whitespacesAndNewlines),
             maxCharacters: Self.maxSpeakerCharacters
@@ -63,6 +78,12 @@ public final class MeetSession: @unchecked Sendable {
 
         let incoming = CaptionTurn(speaker: trimmedSpeaker, text: trimmedText)
         lock.withLock {
+            // T4 tab gate — evaluated BEFORE the freshness clock / lastTurnFinal so a dropped foreign-tab
+            // caption leaves no trace on this recording's state.
+            if recordingLeased {
+                if boundTab == nil, let tab { boundTab = tab }             // first writer binds the tab
+                if let bound = boundTab, let tab, tab != bound { return }  // another tab → drop the caption
+            }
             lastTurnAt = at   // a real turn arrived → refresh the freshness clock
             defer { lastTurnFinal = final }
             guard let last = retained.last else {
@@ -141,7 +162,11 @@ public final class MeetSession: @unchecked Sendable {
     /// A live recording claims this caption buffer: clear any prior captions AND take the lease, all under
     /// ONE lock — so early captions relayed during the (awaited) audio-capture startup aren't lost to a
     /// separate reset, and a concurrent `/import` can't clear the buffer mid-recording (audit HIGH/MED).
-    public func beginRecording() {
+    ///
+    /// `ownerTab` (T4): pass the meeting tab id for an EXTENSION-initiated recording (`/record/start {tab}`)
+    /// so captions bind to that exact tab from the first turn. Leave it nil for an app-initiated recording
+    /// (manual/auto Record button) — `boundTab` then binds first-writer-wins on the first tab-tagged caption.
+    public func beginRecording(ownerTab: Int? = nil) {
         lock.withLock {
             retained = []
             retainedBytes = 0
@@ -149,6 +174,8 @@ public final class MeetSession: @unchecked Sendable {
             lastTurnAt = nil
             recordingLeased = true
             droppedWhileLeased = false
+            self.ownerTab = ownerTab
+            self.boundTab = ownerTab   // extension named the tab up front; nil ⇒ bind on first writer
         }
     }
 
@@ -173,6 +200,8 @@ public final class MeetSession: @unchecked Sendable {
             lastTurnAt = nil
             recordingLeased = false
             droppedWhileLeased = false
+            ownerTab = nil
+            boundTab = nil
             return out
         }
     }
