@@ -35,6 +35,9 @@ struct SettingsView: View {
     // System-audio capture backend (W1a). Default `.auto` — in Phase B that resolves to
     // ScreenCaptureKit (the proven path); the Core Audio tap is opt-in here for founder dogfooding.
     @AppStorage(SystemAudioBackendKind.defaultsKey) private var systemAudioBackend: SystemAudioBackendKind = .auto
+    // Stop-on-leave sub-toggle (W1d) — default OFF, shown only when auto-record is on. Bound to the
+    // same key the MeetingAutoRecorder's join/leave observer reads.
+    @AppStorage(MeetingAutoRecorder.autoStopKey) private var autoStopOnLeave = false
     // Who "you" are — so the AI can tell which tasks are yours.
     @AppStorage(FounderIdentity.defaultsKey) private var founderNames = ""
     @AppStorage(TeamDomains.overrideKey) private var teamDomains = ""
@@ -289,9 +292,19 @@ struct SettingsView: View {
                     get: { env.autoRecorder.isEnabled },
                     set: { env.autoRecorder.setEnabled($0, env: env) }))
                 Text("When on, Recap starts recording automatically as a calendar meeting that "
-                     + "has a Zoom / Google Meet / Teams link begins, and links the recording to that "
-                     + "call. Off by default — audio is transcribed on-device and never leaves your Mac.")
+                     + "has a Zoom / Google Meet / Teams link begins — and, if it starts late, the "
+                     + "moment you actually join. It links the recording to that call. Off by "
+                     + "default — audio is transcribed on-device and never leaves your Mac.")
                     .font(.caption).foregroundStyle(.secondary)
+                if env.autoRecorder.isEnabled {
+                    Toggle("Stop automatically when the call ends", isOn: $autoStopOnLeave)
+                        .padding(.leading, 16)
+                    Text("Ends the recording a short while after everyone leaves the call — and only "
+                         + "a recording Recap started automatically, never one you started yourself. "
+                         + "Off by default — audio is transcribed on-device and never leaves your Mac.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.leading, 16)
+                }
                 Picker("System audio capture", selection: $systemAudioBackend) {
                     Text("Automatic (recommended)").tag(SystemAudioBackendKind.auto)
                     Text("Core Audio tap — lighter permission").tag(SystemAudioBackendKind.coreAudioTap)
