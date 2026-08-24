@@ -94,7 +94,7 @@ body {
 
 /* record button */
 .record-btn {
-  display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 9px; width: 100%; font: inherit; color: var(--text); cursor: pointer; text-align: left;
   background: var(--card); border: 1px solid var(--hairline); border-radius: 12px; padding: 11px 13px;
   transition: background .18s ease, border-color .18s ease, transform .1s ease;
 }
