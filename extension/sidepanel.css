@@ -8,7 +8,7 @@
   --hairline: rgba(0,0,0,.08);
   --text: #16161a;
   --text-2: #62626d;
-  --text-3: #9a9aa4;
+  --text-3: #6a6a74;
   --ok: #21a565;
   --bad: #e5484d;
   --user-bg: linear-gradient(180deg, var(--accent-2), var(--accent));
@@ -18,7 +18,7 @@
   :root {
     --accent: #8b7bf3; --accent-2: #a998f7;
     --bg: #0f0f13; --panel: #16161b; --card: #202027; --hairline: rgba(255,255,255,.09);
-    --text: #f3f3f6; --text-2: #a3a3ad; --text-3: #6a6a75;
+    --text: #f3f3f6; --text-2: #a3a3ad; --text-3: #909099;
     --ok: #3ecf8e; --bad: #ff6369;
   }
 }
