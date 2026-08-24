@@ -75,11 +75,32 @@ public final class AudioMixWriter: @unchecked Sendable {
     // even if the primary detector ever regressed below the energy floor.
     private let energyFallback = EnergyVADGate()
 
+    // W1e — mic-dominant ducking (OFF by default). When enabled, SYSTEM samples are pre-scaled by
+    // `systemDuckScale` into the MAIN mix ONLY, so the founder's own voice stays clear when both
+    // sides talk at once. The `.system.wav` diarization sidecar stays UNSCALED (full level). When
+    // disabled (the default) the place/mix arithmetic is byte-for-byte what shipped pre-W1e.
+    private let micDominantMix: Bool
+    /// The system pre-scale when ducking is ON. Gentle by design (0.8, i.e. ≈ −1.9 dB) — NOT an
+    /// aggressive 0.7 — and a single named constant so it is trivially tunable. Only touches the
+    /// main mix; the sidecar is never scaled.
+    public static let systemDuckScale: Float = 0.8
+    /// `@AppStorage`/`UserDefaults` key for the ducking preference (default false). Shared by the
+    /// Settings toggle and the capture path so they never drift.
+    public static let micDominantMixKey = "callbrain.micDominantMix"
+
+    // W1e — mic-only ~80 Hz high-pass (default ON). Applied to the MIC float samples BEFORE Int16
+    // conversion; state carries across buffers (no clicks). Never touches system audio (the low-level
+    // `ingestMixSamples`/`ingestSystem` path bypasses it entirely). Future options intentionally
+    // SKIPPED here: RNNoise (adds a C dependency) and LUFS/EBU-R128 loudness normalization (can
+    // amplify the noise floor on quiet input) — both deferred, not implemented.
+    private var micHPF: MicHighPassFilter
+
     public init?(mixURL: URL,
                  systemSidecarURL: URL?,
                  target: AVAudioFormat,
                  micSourceRate: Double,
                  gateEnabled: Bool = true,
+                 micDominantMix: Bool = false,
                  vad: any VoiceActivityDetector = SpectralVADGate(),
                  onMicSamples: (@Sendable ([Int16], UInt64) -> Void)? = nil,
                  onSystemSamples: (@Sendable ([Int16], UInt64) -> Void)? = nil,
@@ -87,6 +108,9 @@ public final class AudioMixWriter: @unchecked Sendable {
                  onLevel: @escaping @Sendable (Float) -> Void) {
         self.target = target; self.sampleRate = target.sampleRate
         self.micSourceRate = micSourceRate > 0 ? micSourceRate : target.sampleRate
+        self.micDominantMix = micDominantMix
+        // Coefficients computed once for the mic's native rate (the rate of the `ingestMic` floats).
+        self.micHPF = MicHighPassFilter(sampleRate: micSourceRate > 0 ? micSourceRate : target.sampleRate)
         // Generous pre-roll + hangover so the gate captures the ONSET of a word and doesn't cut trailing
         // words or brief mid-sentence pauses (founder: "misses some of the things I say").
         self.micGate = MicGate(gateEnabled: gateEnabled, sampleRate: Int(target.sampleRate),
@@ -171,7 +195,12 @@ public final class AudioMixWriter: @unchecked Sendable {
     // MARK: - queue-only work
 
     private func mixMic(_ floats: [Float], _ t: UInt64) {
-        guard let converted = convertMic(floats) else { return }
+        // W1e: high-pass the MIC float samples (~80 Hz) BEFORE resampling/Int16 conversion, to strip
+        // DC/rumble/handling noise. MIC ONLY — system audio never reaches this path. Filter state is
+        // carried across buffers (see `MicHighPassFilter`), so there is no click at chunk boundaries.
+        // Runs on `q`, the serial writer queue, so the struct's mutation is race-free.
+        let cleaned = micHPF.process(floats)
+        guard let converted = convertMic(cleaned) else { return }
         reportLevel(converted)
 
         let muted = forceMuted()
@@ -222,6 +251,12 @@ public final class AudioMixWriter: @unchecked Sendable {
 
     private func mix(_ samples: [Int16], at t: UInt64, isMic: Bool) {
         guard !samples.isEmpty else { return }
+        // Leading-silence alignment (W1e confirm): `startNanos` is anchored to the FIRST sample of
+        // whichever stream is processed first, so both streams share t=0. A stream whose first sample
+        // arrives late lands at a positive `elapsed` frame and `place`'s zero-fill pads the gap with
+        // leading silence — mic, system, and the sidecar therefore stay frame-aligned even when one
+        // hardware stream delivers late. The signed-delta clamp below also butts a buffer captured
+        // just before the epoch onto frame 0 rather than wrapping. No fix needed; this is the cover.
         if startNanos == 0 { startNanos = t }
         // SIGNED delta (P2b audit HIGH): a buffer whose capture time precedes the epoch — possible
         // when the first buffer PROCESSED isn't the first CAPTURED across the two stream queues —
@@ -242,7 +277,18 @@ public final class AudioMixWriter: @unchecked Sendable {
         let localStart = Int(start - accBase)
         let needed = localStart + samples.count
         if acc.count < needed { acc.append(contentsOf: repeatElement(0, count: needed - acc.count)) }
-        for i in 0..<samples.count { acc[localStart + i] += Int32(samples[i]) }
+        // W1e mic-dominant ducking: when ON, pre-scale SYSTEM samples into the MAIN mix so the
+        // founder's own voice stays clear when both sides talk. Only the `!isMic` branch is scaled;
+        // when `micDominantMix` is false (the default) this is the exact `+= Int32(samples[i])` sum
+        // that shipped pre-W1e — byte-identical. The mic is never scaled; the sidecar (`accSys`)
+        // below is never scaled either, so diarization keeps a full-level remote channel.
+        if !isMic && micDominantMix {
+            for i in 0..<samples.count {
+                acc[localStart + i] += Int32((Float(samples[i]) * Self.systemDuckScale).rounded())
+            }
+        } else {
+            for i in 0..<samples.count { acc[localStart + i] += Int32(samples[i]) }
+        }
         // Keep the system-only accumulator index-aligned with the mixed one and add ONLY system samples to it,
         // so `<stem>.system.wav` is the remote channel alone for clean group diarization (T3).
         if systemFile != nil {
@@ -279,7 +325,8 @@ public final class AudioMixWriter: @unchecked Sendable {
         // overhead (no clamp, no call) when no checkpoint is wired. Runs on `q`, so it reads the
         // backing store directly.
         if let onFlushedFrames = _onFlushedFrames {
-            onFlushedFrames(mixedInt32.map { Int16(clamping: $0) })
+            // Same soft-limiter the main WAV received (parity with the bytes written above).
+            onFlushedFrames(mixedInt32.map { MixSoftLimiter.limit($0) })
         }
     }
 
@@ -326,7 +373,12 @@ public final class AudioMixWriter: @unchecked Sendable {
         guard let buf = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(frames.count)),
               let dst = buf.int16ChannelData else { return false }
         buf.frameLength = AVAudioFrameCount(frames.count)
-        for i in 0..<frames.count { dst[0][i] = Int16(clamping: frames[i]) }
+        // W1e soft-limiter (default ON, gentle): identical to the old `Int16(clamping:)` for every
+        // in-range sample (|x| ≤ 28000), so quiet/normal audio and the W2 tone tests are unchanged;
+        // it only rounds off samples that would otherwise hard-clip, reducing distortion on loud
+        // both-parties passages. Applied uniformly to the mixed WAV and the system sidecar (a no-op
+        // for the sidecar's full-level-but-in-range samples).
+        for i in 0..<frames.count { dst[0][i] = MixSoftLimiter.limit(frames[i]) }
         do { try file.write(from: buf); return true } catch { return false }
     }
 

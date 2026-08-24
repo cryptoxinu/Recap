@@ -108,12 +108,17 @@ final class AudioCapture {
             .appendingPathComponent("callbrain-rec-\(UUID().uuidString).wav")
         let sidecarURL = includeSystemAudio ? RecordingSidecars.systemAudioURL(forRecording: mixURL) : nil
         // Level updates hop to the main actor (a plain Float is Sendable — safe + cheap).
+        // W1e ducking preference — OFF by default (a balanced mix is best for reviewing calls). Read
+        // per-recording so a Settings toggle takes effect on the next recording. `bool(forKey:)`
+        // returns false for the unset key, so the shipped default keeps the mix byte-identical.
+        let micDominant = UserDefaults.standard.bool(forKey: AudioMixWriter.micDominantMixKey)
         let w = AudioMixWriter(
             mixURL: mixURL,
             systemSidecarURL: sidecarURL,   // T3: capture a clean remote-only channel for diarization
             target: targetFormat,
             micSourceRate: inFormat.sampleRate,
             gateEnabled: micGateEnabled,
+            micDominantMix: micDominant,
             onMicSamples: { [liveObserverQueue] samples, t in
                 let live = live
                 liveObserverQueue.async { live.append(.you, samples, atNanos: t) }

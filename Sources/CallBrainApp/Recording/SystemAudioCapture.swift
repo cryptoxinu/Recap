@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AVFoundation
 import ScreenCaptureKit
+import CoreGraphics
 import CallBrainAppCore
 
 private final class ConvertOnceSys: @unchecked Sendable { var fed = false }
@@ -35,6 +36,12 @@ final class SystemAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, Syst
     @discardableResult
     func startBestEffort() async -> SystemAudioCaptureState {
         publish(.starting)
+        // W1e (Recordly nugget, free/defensive): force CoreGraphics/WindowServer to initialize on the
+        // MAIN thread before the FIRST SCStream start, to dodge the known `CGS_REQUIRE_INIT` crash
+        // when ScreenCaptureKit first spins up CoreGraphics off-main on a cold WindowServer
+        // connection. A no-op `CGMainDisplayID()` probe on main is enough to prime it — cheap, runs
+        // once per recording start, never on the audio path.
+        await MainActor.run { _ = CGDisplayBounds(CGMainDisplayID()) }
         // Proactively surface the native "Allow Screen Recording" dialog if it isn't granted yet — capturing
         // the OTHER participants' audio needs it. Without this, ScreenCaptureKit just fails on a denied grant
         // and the user is left digging through System Settings. The system presents this prompt out-of-process

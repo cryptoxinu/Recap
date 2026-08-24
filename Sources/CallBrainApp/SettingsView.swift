@@ -38,6 +38,10 @@ struct SettingsView: View {
     // Stop-on-leave sub-toggle (W1d) — default OFF, shown only when auto-record is on. Bound to the
     // same key the MeetingAutoRecorder's join/leave observer reads.
     @AppStorage(MeetingAutoRecorder.autoStopKey) private var autoStopOnLeave = false
+    // Mic-dominant ducking (W1e) — OFF by default. When on, the other participants are lowered
+    // slightly in the SAVED mix so the founder's side stays clear; the diarization sidecar stays
+    // full-level. Read per-recording by AudioCapture; off keeps the mix byte-identical.
+    @AppStorage(AudioMixWriter.micDominantMixKey) private var micDominantMix = false
     // Who "you" are — so the AI can tell which tasks are yours.
     @AppStorage(FounderIdentity.defaultsKey) private var founderNames = ""
     @AppStorage(TeamDomains.overrideKey) private var teamDomains = ""
@@ -314,6 +318,11 @@ struct SettingsView: View {
                      + "(Screen Recording). The Core Audio tap needs only the lighter Audio Recording "
                      + "permission — no Screen Recording prompt — but can miss remote audio on Bluetooth "
                      + "speakers/headsets, where Recap falls back to Screen Recording automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Keep my voice dominant in the mix", isOn: $micDominantMix)
+                Text("Lowers the other participants slightly so your side stays clear — off by default "
+                     + "(a balanced mix is best for reviewing calls). Only changes the saved recording; "
+                     + "speaker separation is unaffected. Takes effect on your next recording.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("More accurate live transcription", isOn: Binding(
                     get: { env.liveTranscriptionAccurate },
